@@ -59,6 +59,31 @@
   "Enclose STR in the context prefix and suffix."
   (concat llm-context-prefix str llm-context-suffix))
 
+(defun llm--openai-chat (beg end prompt &optional max-tokens temperature model)
+  "Send the PROMPT to OpenAI using the region (BEG to END) as context."
+  (interactive "r\nsEnter your prompt:")
+  (let ((region-content (if mark-active
+                            (llm--insert-region beg end)
+                          "")))
+    (let* ((context (if region-content
+                        (llm--surround-with-prefix-and-suffix
+                         region-content)
+                      ""))
+           (effective-model (or model llm-openai-default-model))
+           (effective-temperature (or temperature 0.2))
+           (effective-max-tokens (or max-tokens 1000))
+           (user-message `(("role" . "user") ("content" . ,prompt)))
+           (messages (if (not (equal context ""))
+                        (let ((system-message `(("role" . "system") ("content" . ,context))))
+                          (list system-message user-message)) ; If context is non-empty, include both messages
+                      (list user-message))) ; If context is empty, only include the user message
+           (request-body (json-encode `(("model" . ,effective-model)
+                                        ("messages" . ,messages)
+                                        ("temperature" . ,effective-temperature)
+                                        ("max_tokens" . ,effective-max-tokens)))))
+      (message "Request body: %S" request-body)
+      (llm--openai-request request-body prompt region-content))))
+
 (defun llm--openai-request (body prompt &optional context)
   "Send a request to OpenAI with the given BODY.
 Pass the PROMPT to the response handler for visualizing the conversation.
@@ -74,26 +99,6 @@ Optionally, include the CONTEXT of the prompt for the response handler."
       (message "Method: %S" url-request-method)
       (message "Body: %S" url-request-data)
       (url-retrieve llm--openai-api-url #'llm--openai-handle-response (list prompt context)))))
-
-
-(defun llm--openai-chat (beg end prompt &optional max-tokens temperature model)
-  "Send the PROMPT to OpenAI using the region (BEG to END) as context."
-  (interactive "r\nsEnter your prompt:")
-  (let ((region-content (llm--insert-region beg end)))
-    (let* ((context
-            (llm--surround-with-prefix-and-suffix
-             (or region-content "You are a useful assistant")))
-           (effective-model (or model llm-openai-default-model))
-           (effective-temperature (or temperature 0.2))
-           (effective-max-tokens (or max-tokens 1000))
-           (messages `((("role" . "system") ("content" . ,context))
-                       (("role" . "user") ("content" . ,prompt))))
-           (request-body (json-encode `(("model" . ,effective-model)
-                                        ("messages" . ,messages)
-                                        ("temperature" . ,effective-temperature)
-                                        ("max_tokens" . ,effective-max-tokens)))))
-      (message "Request body: %S" request-body)
-      (llm--openai-request request-body prompt region-content))))
 
 (defun llm--extract-response-content (response)
   "Extract the content of the json RESPONSE."
@@ -156,7 +161,8 @@ You can also include the CONTEXT of the prompt for the response handler."
   (interactive)
   (let ((file-path "~/.llm/conversations.org"))
     (with-current-buffer "*LLM Chats*"
-      (write-region (point-min) (point-max) file-path))))
+      ;; The `append' argument is set to `t' to append the content.
+      (write-region (point-min) (point-max) file-path t))))
 
 (defun llm--load-conversations ()
   "Load the LLM conversation from a file."
@@ -168,10 +174,8 @@ You can also include the CONTEXT of the prompt for the response handler."
         (insert-file-contents file-path)
         (org-mode)))))
 
-;;;###autoload
 (define-minor-mode llm-mode
   "Minor mode for interacting with LLMs."
-  :lighter " LLM"
   :group 'llm
   :keymap (let ((map (make-sparse-keymap)))
             (define-key map (kbd "C-c /") #'llm--openai-chat)
