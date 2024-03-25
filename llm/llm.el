@@ -121,22 +121,6 @@
         (org-mode))
       ;; Finally, display the buffer with the response
       (display-buffer response-buffer))))
-;;What this modified function does is:
-;;1. Checks if there was an error in the HTTP request and reports it if present.
-;;2. Extracts the response body from the current buffer (which contains the raw HTTP response).
-;;3. Creates a new buffer named `*HTTP Response*` or switches to it if it already exists.
-;;4. Clears the existing content of the buffer (to ensure that you're seeing only the latest response).
-;;5. Inserts the HTTP response into this buffer.
-;;6. Optionally, you can set the major mode of the buffer to something appropriate for the content, such as `json-mode` if you're dealing with JSON responses. This step is commented out and can be activated if needed.
-;;7. Finally, it displays the buffer containing the response in another window, making it easy to view alongside other work.
-;;
-;;This approach ensures that you have a dedicated space for viewing HTTP responses, which can be particularly useful for debugging or monitoring responses from multiple requests over time.
-
-;; Example usage:
-(let ((json-response "{\\"name\\":\\"John Doe\\",\\"age\\":30}"))
-  (message "Name: %s" (parse-json-and-access-field json-response "name"))
-  (message "Age: %d" (parse-json-and-access-field json-response "age")))
-
 
 (provide 'llm)
 ;;; llm.el ends here
