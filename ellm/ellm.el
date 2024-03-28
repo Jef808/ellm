@@ -200,16 +200,6 @@ Set the MESSAGES, MAX-TOKENS, TEMPERATURE and MODEL to be used."
     ("temperature" . ,temperature)
     ("max_tokens" . ,max-tokens)))
 
-(defun ellm--get-last-session-id ()
-  "Get the session ID from the last conversation."
-  ;; TODO
-  )
-
-(defun ellm--load-session (session-id)
-  "Load the session with the given SESSION-ID."
-  ;; TODO
-  )
-
 (defun ellm-chat (prompt &optional max-tokens temperature model)
   "Send the PROMPT to OpenAI using the marked region as context.
 
@@ -295,8 +285,9 @@ This function is meant to be used with the response from the OpenAI API."
 
 (defun ellm--handle-response (status messages max-tokens temperature model)
   "Handle response. Information about the request is contained in STATUS.
-Optionally, include the original PROMPT for visualizing the whole conversation.
-You can also include the CONTEXT of the prompt for the response handler."
+
+Include the the MESSAGES, MAX-TOKENS, TEMPERATURE and MODEL
+so that we can persist the state of the conversation."
   ;; Check for error in the response
   (when (plist-get status :error)
     (ellm--log (plist-get status :error) "HTTP-ERROR"))
@@ -370,9 +361,6 @@ When no CONVERSATION-ID is provided, retrieve the data for the last entry."
           (model . (org-entry-get (point) "Model"))
           (temperature . (org-entry-get (point) "Temperature"))
           (max-tokens . (org-entry-get (point) "Max-tokens")))))))
-
-(defun ellm--org-insert-conversation (message)
-  "Insert the MESSAGE into the conversations buffer.")
 
 (define-minor-mode ellm-mode
   "Minor mode for interacting with LLMs."
