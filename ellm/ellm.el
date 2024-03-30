@@ -35,6 +35,11 @@
 (defconst ellm--openai-api-url "https://api.openai.com/v1/chat/completions"
   "The URL to send requests to the OpenAI API.")
 
+(defcustom ellm--conversations-file "~/.llm/conversations.org"
+  "The file to store conversation history."
+  :type 'string
+  :group 'ellm)
+
 (defcustom ellm--openai-models-alist '((big . "gpt-4-turbo-preview")
                                        (medium . "gpt-3.5-turbo")
                                        (small . "gpt-3.5-turbo"))
@@ -67,7 +72,7 @@
   :type 'float
   :group 'ellm)
 
-(defcustom ellm-default-max-tokens 10
+(defcustom ellm-default-max-tokens 1000
   "The default temperature to use when making a prompt."
   :type 'integer
   :group 'ellm)
@@ -89,18 +94,12 @@ Your goal is to execute the user's task using any CONTEXT or additional instruct
   :type 'string
   :group 'ellm)
 
-(defcustom ellm-prompt-context-fmt-string "Carefully analyse the following block of code, I will give you a task which should be considered to be in the CONTEXT of that block.\n\n```%s\n%s\n```\n"
+(defcustom ellm-prompt-context-fmt-string "Here is the CONTEXT of your task:\n\n```%s\n%s\n```\n"
   "The format string to use with `format' for building the context message.
 This message will be prepended to the first user prompt of a conversation.
 See `ellm--make-context-message' for usage details."
   :type 'string
   :group 'ellm)
-
-(defvar ellm--current-conversation-id nil
-  "The ID of the current conversation with the LLM API.")
-
-(defvar ellm--current-conversation nil
-  "An alist to store the current conversation history.")
 
 (defconst ellm--log-buffer-name "*ELLM-Logs*"
   "Log buffer for LLM messages.")
@@ -116,12 +115,6 @@ See `ellm--make-context-message' for usage details."
 (defun ellm--major-mode-to-org-lang ()
   "Get the Org mode language corresponding to the current buffer's major mode."
   (cdr (assoc major-mode ellm--major-mode-to-org-lang-alist)))
-
-(defun ellm-clear-current-conversation ()
-  "Clear the conversation history."
-  (interactive)
-  (setq ellm--current-conversation nil)
-  (ellm--log "\"Conversation history cleared.\"" "INFO"))
 
 (defun ellm--log (data &optional label)
   "Log DATA with optional LABEL.
@@ -153,44 +146,14 @@ for determining the language with which to format the context."
                     (buffer-substring-no-properties (region-beginning) (region-end))))
           prompt))
 
-(defun ellm--extract-system-message-content (message-list)
-  "Extracts the content of the first message from the MESSAGE-LIST alist."
-  (unless (not message-list)
-    (let ((first-message (car message-list)))
-      (when (equal (cdar first-message) "system")
-        (cdadr first-message)))))
-
-(defun ellm--extract-last-message-content (message-list)
-  "Extracts the content of the first message from the MESSAGE-LIST alist."
-  (unless (not message-list)
-    (cdadar (last message-list))))
-
 (defun ellm--extract-message-contents (message-alist)
   "Extract the contents of the messages from the MESSAGE-ALIST."
   (mapcar (lambda (message) (cdr (assoc "content" message))) message-alist))
-
-(defun ellm--add-message (role content)
-  "Add message with given ROLE and CONTENT to the conversation history."
-  (setq ellm--current-conversation
-        (append ellm--current-conversation
-                (list `(("role" . ,role) ("content" . ,content))))))
 
 (defun ellm--make-message (role content)
   "Create a message with the given ROLE and CONTENT."
   `(("role" . ,role)
     ("content" . ,content)))
-
-(defun ellm--update-current-conversation (prompt)
-  "Create the messages to send to the LLM api from the PROMPT string.
-This creates a new user message from the prompt and
-adds it to `ellm--current-conversation'.
-In case `ellm--current-conversation' is nil, first initialize it with the
-system message gotten with `ellm--make-prompt-maybe-contextual'."
-  (unless ellm--current-conversation
-      (progn
-        (ellm--add-message "system" ellm-system-message)
-        (ellm--add-message "user" (ellm--make-prompt-maybe-contextual prompt)))
-    (ellm--add-message "user" prompt)))
 
 (defun ellm--make-request-body (messages max-tokens temperature model)
   "Create the request object which will be sent to OpenAI.
@@ -200,6 +163,11 @@ Set the MESSAGES, MAX-TOKENS, TEMPERATURE and MODEL to be used."
     ("temperature" . ,temperature)
     ("max_tokens" . ,max-tokens)))
 
+(defun ellm-test (prefix prompt &optional max-tokens temperatur model)
+  (interactive "P
+sEnter your prompt: "
+               (message (prefix-numeric-value))))
+
 (defun ellm-chat (prompt &optional max-tokens temperature model)
   "Send the PROMPT to OpenAI using the marked region as context.
 
@@ -208,8 +176,8 @@ Optionally set the MAX-TOKENS, TEMPERATURE and MODEL to be used."
   (let* ((effective-model (or model ellm-default-model))
          (effective-temperature (or temperature ellm-default-temperature))
          (effective-max-tokens (or max-tokens ellm-default-max-tokens))
-         (messages (list (ellm--make-message "system" ellm-system-message)
-                         (ellm--make-message "user" (ellm--make-prompt-maybe-contextual prompt))))
+         (messages (list (ellm--make-message "user" (ellm--make-prompt-maybe-contextual prompt))
+                         (ellm--make-message "system" ellm-system-message)))
          (request-body (json-encode (ellm--make-request-body
                                      messages
                                      effective-max-tokens
@@ -279,14 +247,51 @@ This function is meant to be used with the response from the OpenAI API."
 
     ;; Unescape doubly-quoted strings in the response text and
     ;; return the converted string
-    (replace-regexp-in-string "\\\\\"" "\"" (buffer-string))
-    ;; (buffer-string))
-    ))
+    (buffer-string)))
+    ;; (replace-regexp-in-string "\\\\\"" "\"" (buffer-string))))
+
+(defun ellm--insert-response-into-org (messages model temperature max-tokens)
+  "Insert the response along with conversation metadata into the org file.
+
+Pass the response data as MESSAGES, MODEL, TEMPERATURE and MAX-TOKENS."
+  (let ((conversations-buffer  (find-file-noselect ellm--conversations-file))
+        (insertion-success nil)) ; Initialize a flag to track message insertion success
+    (with-current-buffer conversations-buffer
+      (org-mode)
+      (org-fold-hide-sublevels 1)
+      (goto-char (point-min))
+      (org-insert-heading)
+      (insert "Conversation " (current-time-string))
+      (org-id-get-create)
+      (org-set-property "Timestamp" (format-time-string "%Y-%m-%d %H:%M:%S"))
+      (org-set-property "Model" model)
+      (org-set-property "Temperature" (number-to-string temperature))
+      (org-set-property "Max-tokens" (number-to-string max-tokens))
+      (mapc
+       #'(lambda (message)
+           (let ((role (cdr (assoc "role" message)))
+                 (content (cdr (assoc "content" message))))
+             (org-insert-heading nil nil t)
+             (org-demote)
+             (insert (if (equal role "system") "Instructions\n" (concat role)))
+             (when (equal role "user")
+               (org-insert-structure-template
+                (concat "QUOTE\n" content)))
+             (when (equal role "assistant")
+               (insert (concat "\n" content)))
+             (setq insertion-success t))) ; Set the flag to true if messages are processed
+       (reverse messages))
+      (save-buffer)
+      (goto-char (point-min))
+      (org-goto-first-child)
+      (display-buffer conversations-buffer))
+    (unless insertion-success ; Check if the insertion was not successful
+      (ignore-errors (ellm--log "ERROR inserting response into org file" "ERROR")))))
 
 (defun ellm--handle-response (status messages max-tokens temperature model)
   "Handle response. Information about the request is contained in STATUS.
 
-Include the the MESSAGES, MAX-TOKENS, TEMPERATURE and MODEL
+Include the MESSAGES, MAX-TOKENS, TEMPERATURE, and MODEL
 so that we can persist the state of the conversation."
   ;; Check for error in the response
   (when (plist-get status :error)
@@ -295,79 +300,86 @@ so that we can persist the state of the conversation."
     (ellm--log (buffer-substring-no-properties (point) (point-max)) "NO-MESSAGES-IN-HANDLER"))
   (goto-char url-http-end-of-headers)
   (let* ((response (ellm--extract-response-content (buffer-substring-no-properties (point) (point-max))))
-         (response-content (ellm--markdown-to-org response))
-         ;(context (ellm--extract-system-message-content messages))
-         ;(prompt (ellm--extract-last-message-content messages))
-         (conversations-buffer  (find-file-noselect "~/.llm/conversations.org")))
+         (response-content (ellm--markdown-to-org response)))
     (push (ellm--make-message "assistant" response-content) messages)
-    ;; (content (ellm--extract-and-wrap-content response)))
-    ;; to the dedicated buffer in another window
-     (with-current-buffer conversations-buffer
-       ;; Optionally, clear the buffer before inserting new content
-       (org-mode)
-       ;;(erase-buffer)
-       (org-fold-hide-sublevels 1)
-       (goto-char (point-min))
-       ;; Insert the response
-       (org-insert-heading)
-       (insert "Conversation " (current-time-string))
-       (org-id-get-create)
-       (org-set-property "Timestamp" (format-time-string "%Y-%m-%d %H:%M:%S"))
-       (org-set-property "Model" model)
-       (org-set-property "Temperature" (number-to-string temperature))
-       (org-set-property "Max-tokens" (number-to-string max-tokens))
-       ;; (when context
-       ;;   (org-insert-heading-respect-content)
-       ;;   (insert "Context\n" context))
-       (mapc
-        (lambda (message)
-          (let ((role (cdr (assoc "role" message)))
-                (content (cdr (assoc "content" message))))
-            (org-insert-heading)
-            (insert (if (equal role "system") "Instructions\n" (concat role "\n")))
-            (if (equal role "user")
-              (org-insert-structure-template
-               (concat "QUOTE\n" content))
-              (insert content)))) (reverse messages))
-       ;; Save the buffer to a file
-       (save-buffer)
-       (goto-char (point-min))
-       (org-goto-first-child)
-       ;; Finally, display the buffer with the response
-       (display-buffer conversations-buffer))
-     (ignore-errors (ellm--log response "ORG-INSERT-ERROR"))))
+    ;; Call the new function to insert the response into the org file
+    (ellm--insert-response-into-org messages model temperature max-tokens)))
 
-(defun ellm--retrieve-conversation-data (&optional conversation-id)
-  "Retrieve conversation data for a given CONVERSATION-ID from conversations.org.
+(defun ellm--get-first-heading-id ()
+  "Retrieve the ID of the first top-level heading of file at ORG-FILE-PATH."
+  (with-current-buffer (find-file-noselect ellm--conversations-file)
+    (save-excursion ;; Use save-excursion to preserve the original cursor position.
+      (goto-char (point-min))
+      (re-search-forward "^\* ")
+      (org-entry-get (point) "ID"))))
 
-When no CONVERSATION-ID is provided, retrieve the data for the last entry."
-  (with-current-buffer (find-file-noselect "~/.llm/conversations.org")
-    (goto-char (point-min)) ; Start search from the beginning of the buffer
-    (if (not conversation-id)
-        ;; If no conversation ID is provided, retrieve the last entry
-        (org-goto-first-child)
-      (let ((found nil)
-            (data nil))
-        ;; If a conversation ID is provided, search for it
-        (goto-char (point-min))
-        ;; Search for the heading with the specified ID
-        (while (and (not found)
-                    (re-search-forward "^:ID:\s-+\(.*?\)$" nil t))
-          (let ((id (match-string 1)))
-            (when (string= id conversation-id)
-              (setq found t))))
-        ;; Once found, collect the required properties
-        '((timestamp . (org-entry-get (point) "Timestamp"))
-          (model . (org-entry-get (point) "Model"))
-          (temperature . (org-entry-get (point) "Temperature"))
-          (max-tokens . (org-entry-get (point) "Max-tokens")))))))
+(defun ellm--retrieve-conversation-by-id (id)
+  "Retrieve a conversation by its unique ID along with its properties."
+  (with-current-buffer (find-file-noselect ellm--conversations-file)
+    (save-excursion
+      (goto-char (point-min))
+      ;; Search for the ID
+      (let ((p (org-id-find id t)))
+        (if p
+            (progn
+              (goto-char p)
+              (let ((props (ellm--get-properties id))
+                    (messages (progn
+                                (ellm--get-messages-from-org-entry))))
+                `(("props" . ,props) ("messages" . ,messages))))
+          (ellm--log (format "\"Conversation with ID %s not found\"" id) "ERROR"))))))
+
+(defun ellm--get-properties (id)
+  "Retrieve and process properties for a given ID."
+  (let* ((props-alist (ellm--org-get-property-drawer-alist))
+         (props (list
+                 (cons "ID" id)
+                 (cons "Model" (cdr (assoc "Model" props-alist)))
+                 (cons "Temperature" (cdr (assoc "Temperature" props-alist)))
+                 (cons "Max-tokens" (cdr (assoc "Max-tokens" props-alist))))))
+    props))
+
+(defun ellm--get-messages-from-org-entry ()
+  "Retrieve content of all subheadings, prepended with their titles."
+  (org-goto-first-child)
+  (let ((messages-content '()))
+    (while (org-get-next-sibling) ; Move to the next sibling heading
+      (let ((element (org-element-at-point)))
+        (when (eq (org-element-type element) 'headline)
+          ;; Collect the title and content of the subheading
+          (let* ((title (org-element-property :title element))
+                 (content (org-element-property :contents-begin element))
+                 (end (org-element-property :contents-end element))
+                 (formatted-title (format "** %s:\n" title))) ; Format the title
+            (when (and content end)
+              (push (concat formatted-title (buffer-substring-no-properties content end)) messages-content))))))
+    (nreverse messages-content)))
+
+(defun ellm--org-get-property-drawer-alist ()
+  "Retrieve the property drawer of the current heading as an alist."
+  (save-excursion
+    (let ((properties nil))
+      ;; Ensure we are at the beginning of the heading.
+      (org-back-to-heading t)
+      ;; Check if there is a property drawer.
+      (when (org-get-property-block)
+        (let ((drawer-range (org-get-property-block)))
+          ;; Go through each line in the property drawer.
+          (goto-char (car drawer-range))
+          (while (< (point) (cdr drawer-range))
+            (when (looking-at org-property-re)
+              (let ((key (match-string-no-properties 2))
+                    (value (match-string-no-properties 3)))
+                ;; Add the property to the alist.
+                (push (cons key value) properties)))
+            (forward-line))))
+      properties)))
 
 (define-minor-mode ellm-mode
   "Minor mode for interacting with LLMs."
   :group 'ellm
   :keymap (let ((map (make-sparse-keymap)))
             (define-key map (kbd "C-c ; n") #'ellm-chat)
-            (define-key map (kbd "C-c ; k") #'ellm-clear-current-conversation)
             map)
   (if ellm-mode
       (message "ELLM mode enabled")
