@@ -22,6 +22,9 @@
 (require 'json)
 (require 'url)
 (require 'org)
+(require 'org-id)
+(require 'org-element)
+(require 'org-fold)
 
 (defgroup ellm nil
   "Make API calls to LLMs."
@@ -32,7 +35,14 @@
   "A function which retrieves your OpenAI API key."
   (getenv "OPENAI_API_KEY"))
 
+(defun ellm-get-anthropic-api-key ()
+  "A function which retrieves your Anthropic API key."
+  (getenv "ANTHROPIC_API_KEY"))
+
 (defconst ellm--openai-api-url "https://api.openai.com/v1/chat/completions"
+  "The URL to send requests to the OpenAI API.")
+
+(defconst ellm--anthropic-api-url "https://api.anthropic.com/v1/messages"
   "The URL to send requests to the OpenAI API.")
 
 (defcustom ellm--conversations-file "~/.llm/conversations.org"
@@ -55,7 +65,7 @@
   :group 'ellm)
 
 (defcustom ellm-default-prompt-params '((provider "openai"
-                                         model :big
+                                         model 'big
                                          temperature 0.2
                                          max-tokens 800))
   "The default configuration to use when making a prompt."
@@ -88,8 +98,8 @@
   :group 'ellm)
 
 (defcustom ellm-system-message "Format your answers with proper markdown syntax.
-When using headings, always start at depth 3.
-Your goal is to execute the user's task using any CONTEXT or additional instruction they provide."
+When using headings, always start at depth 3 and increment thereafter.
+Your goal is to execute the user's task using (if any) the CONTEXT they provide."
   "The system message to set the stage for new conversations."
   :type 'string
   :group 'ellm)
@@ -163,23 +173,25 @@ Set the MESSAGES, MAX-TOKENS, TEMPERATURE and MODEL to be used."
     ("temperature" . ,temperature)
     ("max_tokens" . ,max-tokens)))
 
-(defun ellm-test (prefix prompt &optional max-tokens temperatur model)
-  (interactive "P
-sEnter your prompt: "
-               (message (prefix-numeric-value))))
-
-(defun ellm-chat (prompt &optional max-tokens temperature model)
+(defun ellm-chat (prompt &optional max-tokens temperature model messages)
   "Send the PROMPT to OpenAI using the marked region as context.
 
-Optionally set the MAX-TOKENS, TEMPERATURE and MODEL to be used."
+Optionally set the MAX-TOKENS, TEMPERATURE and MODEL to be used.
+If MESSAGES is non-nil, use it to continue the conversation."
   (interactive "sEnter your prompt: ")
   (let* ((effective-model (or model ellm-default-model))
          (effective-temperature (or temperature ellm-default-temperature))
          (effective-max-tokens (or max-tokens ellm-default-max-tokens))
-         (messages (list (ellm--make-message "user" (ellm--make-prompt-maybe-contextual prompt))
-                         (ellm--make-message "system" ellm-system-message)))
+         (new-user-message (ellm--make-message
+                            "user"
+                            (ellm--make-prompt-maybe-contextual prompt)))
+         (new-messages
+          (let ((old-messages
+                 (if messages messages
+                   (list (ellm--make-message "system" ellm-system-message)))))
+            (push new-user-message old-messages)))
          (request-body (json-encode (ellm--make-request-body
-                                     messages
+                                     new-messages
                                      effective-max-tokens
                                      effective-temperature
                                      effective-model)))
@@ -192,7 +204,7 @@ Optionally set the MAX-TOKENS, TEMPERATURE and MODEL to be used."
           (url-request-data request-body))
       ;; Debug: Print the headers to *Messages* buffer for inspection.
       (url-retrieve ellm--openai-api-url #'ellm--handle-response
-                    (list messages
+                    (list new-messages
                           effective-max-tokens
                           effective-temperature
                           effective-model)))))
@@ -201,17 +213,19 @@ Optionally set the MAX-TOKENS, TEMPERATURE and MODEL to be used."
   "Extract the text from the json RESPONSE-BODY.
 
 This function is meant to be used with the response from the OpenAI API."
-  (or
-   (let* ((parsed-json (json-parse-string response-body))
-          (choices (gethash "choices" parsed-json))
-          ;; Note: `aref` is used to access elements of vectors (arrays) in Elisp.
-          (first-choice (aref choices 0))
-          (message (gethash "message" first-choice))
-          (content (gethash "content" message))
-          (_ (unless (not ellm-debug-mode) (ellm--log response-body "RESPONSE"))))
-     ;; ;; Unescape doubly-quoted strings in the response text
-     (replace-regexp-in-string "\\\\\"" "\"" content))
-     (ellm--log response-body "JSON-ERROR")))
+  (if response-body
+    (or
+     (let* ((parsed-json (json-parse-string response-body))
+            (choices (gethash "choices" parsed-json))
+            ;; Note: `aref` is used to access elements of vectors (arrays) in Elisp.
+            (first-choice (aref choices 0))
+            (message (gethash "message" first-choice))
+            (content (gethash "content" message))
+            (_ (when ellm-debug-mode (ellm--log response-body "RESPONSE"))))
+       ;; ;; Unescape doubly-quoted strings in the response text
+       (replace-regexp-in-string "\\\\\"" "\"" content))
+     (when ellm-debug-mode (ellm--log response-body "JSON-ERROR")))
+    (message "REQUEST-ERROR: No response body")))
 
 (defun ellm--markdown-to-org (markdown-string)
   "Convert a MARKDOWN-STRING into an Org-mode formatted string."
@@ -248,17 +262,15 @@ This function is meant to be used with the response from the OpenAI API."
     ;; Unescape doubly-quoted strings in the response text and
     ;; return the converted string
     (buffer-string)))
-    ;; (replace-regexp-in-string "\\\\\"" "\"" (buffer-string))))
+    ;(replace-regexp-in-string "\\\\\"" "\"" (buffer-string)))
 
 (defun ellm--insert-response-into-org (messages model temperature max-tokens)
   "Insert the response along with conversation metadata into the org file.
 
 Pass the response data as MESSAGES, MODEL, TEMPERATURE and MAX-TOKENS."
-  (let ((conversations-buffer  (find-file-noselect ellm--conversations-file))
-        (insertion-success nil)) ; Initialize a flag to track message insertion success
-    (with-current-buffer conversations-buffer
+  (let ((buffer (find-file-noselect ellm--conversations-file)))
+    (with-current-buffer buffer
       (org-mode)
-      (org-fold-hide-sublevels 1)
       (goto-char (point-min))
       (org-insert-heading)
       (insert "Conversation " (current-time-string))
@@ -273,20 +285,20 @@ Pass the response data as MESSAGES, MODEL, TEMPERATURE and MAX-TOKENS."
                  (content (cdr (assoc "content" message))))
              (org-insert-heading nil nil t)
              (org-demote)
-             (insert (if (equal role "system") "Instructions\n" (concat role)))
-             (when (equal role "user")
-               (org-insert-structure-template
-                (concat "QUOTE\n" content)))
-             (when (equal role "assistant")
-               (insert (concat "\n" content)))
-             (setq insertion-success t))) ; Set the flag to true if messages are processed
+             (insert (if (string= role "system") "Instructions\n" (concat role "\n")))
+             (if (string= role "user")
+                 (org-insert-structure-template
+                  (concat "QUOTE\n" content))
+               (insert content))))
        (reverse messages))
       (save-buffer)
+      (display-buffer buffer)
       (goto-char (point-min))
+      (org-overview)
       (org-goto-first-child)
-      (display-buffer conversations-buffer))
-    (unless insertion-success ; Check if the insertion was not successful
-      (ignore-errors (ellm--log "ERROR inserting response into org file" "ERROR")))))
+      (when (re-search-forward "^\*\* assistant" nil t)
+        (progn
+          (save-excursion (outline-show-subtree)))))))
 
 (defun ellm--handle-response (status messages max-tokens temperature model)
   "Handle response. Information about the request is contained in STATUS.
@@ -295,11 +307,26 @@ Include the MESSAGES, MAX-TOKENS, TEMPERATURE, and MODEL
 so that we can persist the state of the conversation."
   ;; Check for error in the response
   (when (plist-get status :error)
-    (ellm--log (plist-get status :error) "HTTP-ERROR"))
-  (when (not messages)
-    (ellm--log (buffer-substring-no-properties (point) (point-max)) "NO-MESSAGES-IN-HANDLER"))
+    (ellm--log (plist-get status :error) "HTTP-ERROR")
+    (cl-return))
+  (when (plist-get status :redirect)
+    (ellm--log (plist-get status :redirect) "HTTP-REDIRECT")
+    (cl-return))
   (goto-char url-http-end-of-headers)
-  (let* ((response (ellm--extract-response-content (buffer-substring-no-properties (point) (point-max))))
+  (let ((raw-response (buffer-substring-no-properties (point) (point-max))))
+    (if (and raw-response (> (length raw-response) 0))
+        (ellm--handle-raw-response raw-response messages max-tokens
+                                   temperature model)
+      (ellm--log "\"No response content (DNS resolve or TCP error)\""
+                 "REQUEST-ERROR"))))
+
+(defun ellm--handle-raw-response (raw-response messages max-tokens
+                                               temperature model)
+  "Handle the RAW-RESPONSE from the API call.
+
+Include the MESSAGES, MAX-TOKENS, TEMPERATURE, and MODEL
+so that we can persist the state of the conversation."
+  (let* ((response (ellm--extract-response-content raw-response))
          (response-content (ellm--markdown-to-org response)))
     (push (ellm--make-message "assistant" response-content) messages)
     ;; Call the new function to insert the response into the org file
