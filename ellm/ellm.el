@@ -218,6 +218,11 @@ Will call `json-encode' on `DATA' if
   "Log when there is no response body."
   (ellm--log "No response body (DNS resolve or TCP error)" "REQUEST-ERROR" t))
 
+(defun ellm--log-response-format-error (response-content)
+  "Log when the `RESPONSE-CONTENT' doesn't split a title."
+  (ellm--log (format "No title or no body in the response content:\n%s" response-content)
+             "RESPONSE-FORMAT-ERROR" t))
+
 (defun ellm--log-request-body (body)
   "Log the request `BODY'."
   (when ellm-debug-mode (ellm--log body "REQUEST-BODY")))
@@ -292,9 +297,17 @@ for determining the language with which to format the context."
          (list (ellm--make-message :user content))))
 
 (defun ellm--add-assistant-message (content prompt-data)
-  "Add an assistant message with `CONTENT' to the `PROMPT-DATA'."
-  (nconc (cdr (assoc 'messages prompt-data))
-         (list (ellm--make-message :assistant content))))
+  "Add an assistant message with `CONTENT' to the `PROMPT-DATA'.
+We set the title its provide as the new title."
+  (let* ((split-content (ellm--separate-response content))
+         (title (car split-content))
+         (response (cdr split-content)))
+    (unless (and title response)
+      (ellm--log-response-format-error content))
+    (when title
+        (setf (alist-get 'title prompt-data nil nil #'eq) title))
+    (nconc (cdr (assoc 'messages prompt-data))
+           (list (ellm--make-message :assistant (or response content))))))
 
 (defun ellm--get-prompt-config-alist ()
   "Get the current configuration for making an API call."
