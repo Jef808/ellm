@@ -123,7 +123,7 @@
 (defcustom ellm-system-message "Your goal is to execute the user's task, using **all** \
 of the CONTEXT the user provides.
 You should also ***always*** include a short summary title \
-which describes the discussion or the task you are about to execute. \n \
+which describes the discussion for easy navigation through my conversation history. \n \
 Separate it by a horizontal rule as follows:
 
 \<Your title here\>
@@ -149,7 +149,8 @@ See `ellm--make-context-message' for usage details."
     "Set the API provider for My-Package."
     (interactive)
     (setq ellm-provider
-          (intern (completing-read "Choose provider: " '(openai anthropic)))))
+          (intern (completing-read "Choose provider: " '(openai anthropic))))
+    (message "...provider set to %s..." ellm-provider))
 
 (defun ellm-set-model-size ()
     "Set the API provider for My-Package."
@@ -159,7 +160,25 @@ See `ellm--make-context-message' for usage details."
     (let ((models-alist (if (eq ellm-provider 'openai)
                             ellm--openai-models-alist
                           ellm--anthropic-models-alist)))
-      (setq ellm-default-model (cdr (assoc ellm-model-size models-alist)))))
+      (setq ellm-default-model (cdr (assoc ellm-model-size models-alist)))
+      (message "...model set to %s..." ellm-default-model)))
+
+(defun ellm-set-max-tokens (max-tokens)
+  "Set the `MAX-TOKENS' to use for the LLM prompt."
+  (interactive "nMax tokens (between 1 and 4096): ")
+  (cond ((and (integerp max-tokens)
+           (and (>= max-tokens 1) (<= max-tokens 4096)))
+         (setq ellm-default-max-tokens max-tokens)
+         (message "...max-tokens set to %d..." max-tokens))
+        (t (message "Error: Invalid input: %s" max-tokens))))
+
+(defun ellm-set-temperature (temperature)
+  "Set the `TEMPERATURE' to use for the LLM prompt."
+  (interactive "nTemperature (between 0.0 and 2.0): ")
+  (cond ((and (>= temperature 0) (<= temperature 2))
+         (setq ellm-default-temperature temperature)
+         (message "...temperature set to %.1f..." temperature))
+        (t (message "Error: Invalid input: %s" temperature))))
 
 (defun ellm--log (data &optional label should-encode-to-json)
   "Log `DATA' with an optional `LABEL'.
@@ -276,6 +295,12 @@ for determining the language with which to format the context."
   "Add an assistant message with `CONTENT' to the `PROMPT-DATA'."
   (nconc (cdr (assoc 'messages prompt-data))
          (list (ellm--make-message :assistant content))))
+
+(defun ellm--get-prompt-config-alist ()
+  "Get the current configuration for making an API call."
+  `((temperature . ,ellm-default-temperature)
+    (max_tokens . ,ellm-default-max-tokens)
+    (model . ,ellm-default-model)))
 
 (defun ellm--make-prompt-data-alist (messages &optional max-tokens temperature model)
   "Create the request object which will be sent to the LLM provider's api.
@@ -408,6 +433,16 @@ Call CALLBACK with the result."
       (insert markdown-string)
       (shell-command-on-region (point-min) (point-max) pandoc-command (current-buffer) t ellm--log-buffer-name)
       (buffer-string))))
+
+(defun ellm--separate-response (response-content)
+  "Take the `RESPONSE-CONTENT' string and extract the title.
+Return a cons cell consisting of the title for its =car= and
+the rest of the response for its =cdr=.
+Note: the ~?~ in ~.*?~ makes the match non-greedy, ensuring it stops at the
+first horizontal rule."
+  (when (string-match "\\(.*?\\)--------------\\(.*\\)" response-content)
+    (cons (string-trim (match-string 1 response-content))
+          (string-trim (match-string 2 response-content)))))
 
 (defun ellm--insert-conversation-into-org (prompt-data)
   "Insert the `PROMPT-DATA' into the org file."
