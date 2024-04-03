@@ -52,14 +52,29 @@
   :type 'string
   :group 'ellm)
 
-(defcustom ellm--openai-models-alist '((big . "gpt-4-turbo-preview")
+(defcustom ellm-provider 'openai
+  "Default provider to use for API calls."
+  :type '(choice
+          (const :tag "OpenAI" openai)
+          (const :tag "Anthropic" anthropic))
+  :group 'ellm)
+
+(defcustom ellm-model-size 'big
+  "Default model size to use for API calls."
+  :type '(choice
+          (const :tag "Big" big)
+          (const :tag "Medium" medium)
+          (const :tag "Small" small))
+  :group 'ellm)
+
+(defcustom ellm--openai-models-alist `((big . "gpt-4-turbo-preview")
                                        (medium . "gpt-3.5-turbo")
                                        (small . "gpt-3.5-turbo"))
   "Alist mapping model sizes to OpenAI model names."
   :type 'alist
   :group 'ellm)
 
-(defcustom ellm--anthropic-models-alist '((big . "claude-3-opus-20240229")
+(defcustom ellm--anthropic-models-alist `((big . "claude-3-opus-20240229")
                                           (medium . "claude-3-sonnet-20240229")
                                           (small . "claude-3-haiku-20240307"))
   "Alist mapping model sizes to OpenAI model names."
@@ -105,7 +120,17 @@
 (defvar ellm--mock-response nil
   "If non-nil, use a mock response instead of making an API call.")
 
-(defcustom ellm-system-message "Format your answers with proper markdown syntax. Your goal is to execute the user's task using (if any) the CONTEXT they provide."
+(defcustom ellm-system-message "Your goal is to execute the user's task, using **all** \
+of the CONTEXT the user provides.
+You should also ***always*** include a short summary title \
+which describes the discussion or the task you are about to execute. \n \
+Separate it by a horizontal rule as follows:
+
+\<Your title here\>
+
+---
+
+\<Your response here\>"
   "The system message to set the stage for new conversations."
   :type 'string
   :group 'ellm)
@@ -120,28 +145,47 @@ See `ellm--make-context-message' for usage details."
 (defconst ellm--log-buffer-name "*ELLM-Logs*"
   "Log buffer for LLM messages.")
 
+(defun ellm-set-provider ()
+    "Set the API provider for My-Package."
+    (interactive)
+    (setq ellm-provider
+          (intern (completing-read "Choose provider: " '(openai anthropic)))))
+
+(defun ellm-set-model-size ()
+    "Set the API provider for My-Package."
+    (interactive)
+    (setq ellm-model-size
+          (intern (completing-read "Choose model size: " '(big medium small))))
+    (let ((models-alist (if (eq ellm-provider 'openai)
+                            ellm--openai-models-alist
+                          ellm--anthropic-models-alist)))
+      (setq ellm-default-model (cdr (assoc ellm-model-size models-alist)))))
+
 (defun ellm--log (data &optional label should-encode-to-json)
-  "Log DATA with an optional LABEL.
-SHOULD-ENCODE-TO-JSON should be set to a non-nil value if the data
-is not already a valid json string.
-If an optional FMT-FN is passed, it is applied to the text before logging it."
-  (let ((effective-data (if should-encode-to-json (json-encode data) data)))
+  "Log `DATA' with an optional `LABEL'.
+Will call `json-encode' on `DATA' if
+`SHOULD-ENCODE-TO-JSON' is set to a non-nil value."
+  (let* ((trimmed-data (string-trim data))
+         (effective-data (if should-encode-to-json (json-serialize trimmed-data) trimmed-data))
+         (formatted-log (format "{\"TIMESTAMP\": \"%s\", \"%s\": %s}"
+                                (format-time-string "%Y-%m-%d %H:%M:%S")
+                                (or label "INFO")
+                                effective-data)))
     (with-current-buffer (get-buffer-create ellm--log-buffer-name)
       (goto-char (point-max))
-      (unless (bolp) (insert "\n"))
-      (save-excursion
-        (insert (format
-                 "{\"TIMESTAMP\": %S, %S: %s}"
-                 (current-time-string)
-                 (or label "INFO")
-                 effective-data)))
-      (progn
-        (json-pretty-print (point) (point-max))
-        (replace-regexp-in-region "\\\\n" "\n" (point) (point-max))))))
+      (unless (bolp) (newline))
+      (let ((pos (point)))
+        (insert formatted-log)
+        (newline)
+        (json-pretty-print pos (point-max))))))
 
 (defun ellm--log-response-error (error)
   "Log the `ERROR' response."
   (ellm--log error "RESPONSE-ERROR" t))
+
+(defun ellm--log-json-error (error)
+  "Log the `ERROR' response."
+  (ellm--log error "JSON-ERROR" t))
 
 (defun ellm--log-http-error (status)
   "Log HTTP `STATUS' errors."
@@ -160,7 +204,7 @@ If an optional FMT-FN is passed, it is applied to the text before logging it."
   (when ellm-debug-mode (ellm--log body "REQUEST-BODY")))
 
 (defun ellm--log-response-body (response-body)
-  "Log the `RESPONSE'."
+  "Log the `RESPONSE-BODY'."
   (when ellm-debug-mode (ellm--log response-body "RESPONSE-BODY")))
 
 (defun ellm--log-response-content (response-content)
@@ -174,13 +218,13 @@ If an optional FMT-FN is passed, it is applied to the text before logging it."
 (defun ellm--log-markdown-messages (markdown-string)
   "Log `MARKDOWN-STRING'."
   (when ellm-debug-mode
-    (ellm--log (format "%s" (ellm--markdown-pretty-print markdown-string))
-     "MESSAGES-FOR-MARKDOWN" t)))
+    (ellm--log (ellm--markdown-pretty-print markdown-string)
+               "MESSAGES-FOR-MARKDOWN" t)))
 
 (defun ellm--log-org-messages (org-string)
   "Log `ORG-STRING'."
   (when ellm-debug-mode
-    (ellm--log (format "%s" (ellm--org-pretty-print org-string))
+    (ellm--log (ellm--org-pretty-print org-string)
                "MESSAGES-FOR-ORG-MODE" t)))
 
 (defun ellm--org-pretty-print (org-content)
@@ -286,7 +330,7 @@ so that we can persist the state of the conversation."
          (if (<= (point-max) (point))
              (ellm--log-no-response-body)
            (let ((parsed-response (ellm--parse-json-response)))
-             (ellm--log parsed-response "PARSED-RESPONSE" t)
+             ;; (ellm--log parsed-response "PARSED-RESPONSE" t)
              (when parsed-response
                (ellm--add-response-to-conversation parsed-response prompt-data)))))))
 
@@ -294,7 +338,7 @@ so that we can persist the state of the conversation."
   "Parse the JSON response from the API call."
   (condition-case error
       (let ((response-body
-             (buffer-substring-no-properties (point) (point-max))))
+             (string-trim (buffer-substring-no-properties (point) (point-max)))))
         (ellm--log-response-body response-body)
         (json-parse-string response-body))
     (json-parse-error
@@ -305,22 +349,23 @@ so that we can persist the state of the conversation."
   "Process the PARSED-RESPONSE from the API call.
 `PROMPT-DATA' includes the messages, max-tokens, temperature, and model"
   (let ((response-content (ellm--extract-response-content-openai parsed-response)))
-    (ellm--log-response-content response-content)
+    ;; (ellm--log-response-content response-content)
     (ellm--add-assistant-message response-content prompt-data)
-    (ellm--log-prompt-data prompt-data)
-    (ellm--insert-response-into-org prompt-data)))
+    ;; (ellm--log-prompt-data prompt-data)
+    (ellm--insert-conversation-into-org prompt-data)))
 
 (defun ellm--extract-response-content-openai (response)
   "Extract the text from the json RESPONSE.
 This function is meant to be used with the response from the OpenAI API."
-  (condition-case content
+  (condition-case error
       (let* ((choices (gethash "choices" response))
              ;; Note: `aref` is used to access elements of vectors (arrays) in Elisp.
              (first-choice (aref choices 0))
-             (message (gethash "message" first-choice)))
-        (gethash "content" message))
-    (wrong-number-of-arguments (ellm--log-error (format "\"Invalid format: %S\"" content) "RESPONSE-ERROR"))
-    (:success (replace-regexp-in-string "\\\\\"" "\"" content))))
+             (msg (gethash "message" first-choice)))
+        (replace-regexp-in-string "\\\\\"" "\"" (gethash "content" msg)))
+    (wrong-number-of-arguments (ellm--log-response-error error))
+    ;; (:success (replace-regexp-in-string "\\\\\"" "\"" content))
+    ))
 
 (defun ellm--stringify-message (message)
   "Convert the `MESSAGE' to a string.
@@ -364,23 +409,22 @@ Call CALLBACK with the result."
       (shell-command-on-region (point-min) (point-max) pandoc-command (current-buffer) t ellm--log-buffer-name)
       (buffer-string))))
 
-(defun ellm--insert-response-into-org (prompt-data)
-  "Insert the response along with conversation metadata into the org file.
-Pass the response data as MESSAGES, MODEL, TEMPERATURE and MAX-TOKENS."
+(defun ellm--insert-conversation-into-org (prompt-data)
+  "Insert the `PROMPT-DATA' into the org file."
   (let* ((messages (cdr (assoc 'messages prompt-data)))
          (model (cdr (assoc 'model prompt-data)))
          (temperature (cdr (assoc 'temperature prompt-data)))
-         (max-tokens (cdr (assoc 'max_tokens prompt-data)))
+         ;; (max-tokens (cdr (assoc 'max_tokens prompt-data)))
          (buffer (find-file-noselect ellm--conversations-file))
          (markdown-formatted-messages
           (ellm--messages-to-markdown-string messages))
          (org-formatted-messages
           (ellm--markdown-to-org-using-pandoc markdown-formatted-messages)))
-    (ellm--log-markdown-messages markdown-formatted-messages)
-    (ellm--log-org-messages org-formatted-messages)
+    ;; (ellm--log-markdown-messages markdown-formatted-messages)
+    ;; (ellm--log-org-messages org-formatted-messages)
     (with-current-buffer buffer
-      (org-mode)
       (save-excursion
+        (org-mode)
         (goto-char (point-min))
         (org-insert-heading)
         (insert "Conversation " (current-time-string) "\n")
@@ -388,14 +432,14 @@ Pass the response data as MESSAGES, MODEL, TEMPERATURE and MAX-TOKENS."
         (org-set-property "Timestamp" (format-time-string "%Y-%m-%d %H:%M:%S"))
         (org-set-property "Model" model)
         (org-set-property "Temperature" (number-to-string temperature))
-        (org-set-property "Max-tokens" (number-to-string max-tokens))
         (insert org-formatted-messages)
-        (save-buffer)))))
+        (save-buffer)
+        (display-buffer (current-buffer))))))
 
 (defun ellm--get-first-heading-id ()
   "Retrieve the ID of the first top-level heading of file at ORG-FILE-PATH."
   (with-current-buffer (find-file-noselect ellm--conversations-file)
-    (save-excursion ;; Use save-excursion to preserve the original cursor position.
+    (save-excursion
       (goto-char (point-min))
       (re-search-forward "^\* ")
       (org-entry-get (point) "ID"))))
