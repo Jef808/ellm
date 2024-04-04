@@ -514,7 +514,7 @@ Call CALLBACK with the result."
       (process-send-string process markdown-string)
       (process-send-eof process))))
 
-(defun ellm--markdown-to-org-using-pandoc (markdown-string)
+(defun ellm--markdown-to-org-sync (markdown-string)
   "Convert MARKDOWN-STRING from Markdown to Org using Pandoc.
 
 Note: Doing `--shift-heading-level-by=2' results in depth 4 headings
@@ -532,29 +532,39 @@ most of the time for responses from openai."
          (model (alist-get 'model prompt-data))
          (temperature (alist-get 'temperature prompt-data))
          (buffer (find-file-noselect ellm--conversations-file))
-         (markdown-formatted-messages
-          (ellm--messages-to-markdown-string messages))
-         (org-formatted-messages
-          (ellm--markdown-to-org-using-pandoc markdown-formatted-messages)))
-    (ellm--log-markdown-messages markdown-formatted-messages)
+         (org-formatted-messages (ellm--convert-messages-to-org messages)))
     (ellm--log-org-messages org-formatted-messages)
-    (with-current-buffer buffer
-      (org-mode)
-      (goto-char (point-min))
-      (org-overview)
-      (org-insert-heading)
-      (save-excursion
-        (insert title)
-        (newline)
-        (org-id-get-create)
-        (org-set-property "Timestamp" (format-time-string "%Y-%m-%d %H:%M:%S"))
-        (org-set-property "Model" model)
-        (org-set-property "Temperature" (number-to-string temperature))
+    (save-excursion
+      (with-current-buffer buffer
+        (ellm--prepare-org-buffer)
+        (ellm--insert-heading-and-metadata title model temperature)
         (insert org-formatted-messages)
-        (insert "--------------")
-        (save-buffer)
-        (org-goto-line 4)
-        (display-buffer (current-buffer))))))
+        (insert "\n--------------\n")
+        (save-buffer))
+      (display-buffer buffer)
+      (org-goto-line 4))))
+
+(defun ellm--convert-messages-to-org (messages)
+  "Convert MESSAGES to an Org-formatted string using Pandoc."
+  (let ((markdown (ellm--messages-to-markdown-string messages)))
+    (ellm--log-markdown-messages markdown)
+    (ellm--markdown-to-org-sync markdown)))
+
+(defun ellm--insert-heading-and-metadata (title model temperature)
+  "Insert an Org heading with TITLE, MODEL, and TEMPERATURE as properties."
+  (org-insert-heading)
+  (insert title)
+  (newline)
+  (org-id-get-create)
+  (org-set-property "Timestamp" (format-time-string "%Y-%m-%d %H:%M:%S"))
+  (org-set-property "Model" model)
+  (org-set-property "Temperature" (number-to-string temperature)))
+
+(defun ellm--prepare-org-buffer ()
+  "Prepare BUFFER for insertion by setting Org mode and showing an overview."
+  (org-mode)
+  (goto-char (point-min))
+  (org-overview))
 
 (defun ellm--get-first-heading-id ()
   "Retrieve the ID of the first top-level heading of file at ORG-FILE-PATH."
