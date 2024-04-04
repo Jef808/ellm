@@ -414,6 +414,13 @@ Return the conversation-data alist."
     (setf (alist-get 'title data nil t) nil)
     (json-encode data)))
 
+(defun ellm--get-url (conversation-data)
+  "Get the URL to send the request to based on `CONVERSATION-DATA'."
+  (let ((provider (ellm--get-model-provider conversation-data)))
+    (cond ((eq provider 'openai) ellm--openai-api-url)
+          ((eq provider 'anthropic) ellm--anthropic-api-url)
+          (t (error "ellm--get-url: Unknown provider: %s" (symbol-name provider))))))
+
 (defun ellm-chat (prompt &optional current-conversation-data)
   "Send the PROMPT through to the LLM.
 
@@ -422,9 +429,9 @@ If `CURRENT-CONVERSATION-DATA' is non-nil, continue that conversation."
   (let ((conversation-data (if current-conversation-data
                                current-conversation-data
                              (ellm--initialize-conversation prompt))))
-    (let* ((request-headers (ellm--prepare-request-headers conversation-data))
+    (let* ((url (ellm--get-url conversation-data))
+           (request-headers (ellm--prepare-request-headers conversation-data))
            (request-body (ellm--prepare-request-body conversation-data))
-           (url ellm--openai-api-url)
            (url-request-method "POST")
            (url-request-extra-headers request-headers)
            (url-request-data request-body))
@@ -462,7 +469,13 @@ Information about the response is contained in STATUS (see `url-retrieve')."
 (defun ellm--add-response-to-conversation (parsed-response prompt-data)
   "Process the PARSED-RESPONSE from the API call.
 `PROMPT-DATA' includes the messages, max-tokens, temperature, and model"
-  (let ((response-content (ellm--extract-response-content-openai parsed-response)))
+  (let* ((provider (ellm--get-model-provider prompt-data))
+         (response-content (cond ((eq provider 'openai)
+                                  (ellm--extract-response-content-openai parsed-response))
+                                 ((eq provider 'anthropic)
+                                  (ellm--extract-response-content-anthropic parsed-response))
+                                 (t (error "ellm--add-response-to-conversation: Unknown provider: %s"
+                                           (symbol-name provider))))))
     (ellm--handle-assistant-response response-content prompt-data)
     (ellm--log-prompt-data prompt-data)
     (ellm--insert-conversation-into-org prompt-data)))
@@ -475,6 +488,16 @@ This function is meant to be used with the response from the OpenAI API."
              (first-choice (aref choices 0))
              (msg (gethash "message" first-choice))
              (content (gethash "content" msg)))
+        (ellm--log-response-content content)
+        (replace-regexp-in-string "\\\\\"" "\"" content))
+    (wrong-type-argument (ellm--log-response-error error))))
+
+(defun ellm--extract-response-content-anthropic (response)
+  "Extract the text from the json RESPONSE."
+  (condition-case error
+      (let* ((messages (gethash "content" response))
+             (first-message (aref messages 0))
+             (content (gethash "text" first-message)))
         (ellm--log-response-content content)
         (replace-regexp-in-string "\\\\\"" "\"" content))
     (wrong-type-argument (ellm--log-response-error error))))
