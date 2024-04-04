@@ -33,13 +33,17 @@
   :group 'tools
   :prefix "ellm-")
 
-(defun ellm-get-openai-api-key ()
+(defcustom ellm-get-openai-api-key
+  #'ellm--get-openai-api-key-from-env
   "A function which retrieves your OpenAI API key."
-  (getenv "OPENAI_API_KEY"))
+  :type 'function
+  :group 'ellm)
 
-(defun ellm-get-anthropic-api-key ()
+(defcustom ellm-get-anthropic-api-key
+  #'ellm--get-anthropic-api-key-from-env
   "A function which retrieves your Anthropic API key."
-  (getenv "ANTHROPIC_API_KEY"))
+  :type 'function
+  :group 'ellm)
 
 (defconst ellm--openai-api-url "https://api.openai.com/v1/chat/completions"
   "The URL to send requests to the OpenAI API.")
@@ -78,6 +82,15 @@
                                           (medium . "claude-3-sonnet-20240229")
                                           (small . "claude-3-haiku-20240307"))
   "Alist mapping model sizes to OpenAI model names."
+  :type 'alist
+  :group 'ellm)
+
+(defcustom ellm-model-providers-alist `(("gpt-4-turbo-preview" . openai)
+                                         ("gpt-3.5-turbo" . openai)
+                                         ("claude-3-opus-20240229" . anthropic)
+                                         ("claude-3-sonnet-20240229" . anthropic)
+                                         ("claude-3-haiku-20240307" . anthropic))
+  "Alist mapping model names to their providers."
   :type 'alist
   :group 'ellm)
 
@@ -124,13 +137,13 @@
 of the CONTEXT the user provides.
 You should also ***always*** include a short summary title \
 which describes the discussion for easy navigation through my conversation history. \n \
-Separate it by a horizontal rule as follows:
+Separate it by a horizontal rule (i.e. with three or more dashes) as follows:
 
-\<Your title here\>
+{{Your title here}}
 
----
+--------------------------------------------
 
-\<Your response here\>"
+{{Your response here}}"
   "The system message to set the stage for new conversations."
   :type 'string
   :group 'ellm)
@@ -144,6 +157,14 @@ See `ellm--make-context-message' for usage details."
 
 (defconst ellm--log-buffer-name "*ELLM-Logs*"
   "Log buffer for LLM messages.")
+
+(defun ellm--get-openai-api-key-from-env ()
+  "Get the OpenAI API key from the environment."
+  (getenv "OPENAI_API_KEY"))
+
+(defun ellm--get-anthropic-api-key-from-env ()
+  "Get the Anthropic API key from the environment."
+  (getenv "ANTHROPIC_API_KEY"))
 
 (defun ellm-set-provider ()
     "Set the API provider for My-Package."
@@ -184,27 +205,32 @@ See `ellm--make-context-message' for usage details."
   "Log `DATA' with an optional `LABEL'.
 Will call `json-encode' on `DATA' if
 `SHOULD-ENCODE-TO-JSON' is set to a non-nil value."
-  (let* ((trimmed-data (string-trim data))
-         (effective-data (if should-encode-to-json (json-serialize trimmed-data) trimmed-data))
+  (let* ((json-data (if should-encode-to-json (json-encode data) data))
          (formatted-log (format "{\"TIMESTAMP\": \"%s\", \"%s\": %s}"
                                 (format-time-string "%Y-%m-%d %H:%M:%S")
                                 (or label "INFO")
-                                effective-data)))
+                                json-data)))
     (with-current-buffer (get-buffer-create ellm--log-buffer-name)
       (goto-char (point-max))
       (unless (bolp) (newline))
       (let ((pos (point)))
         (insert formatted-log)
         (newline)
-        (json-pretty-print pos (point-max))))))
+        (json-pretty-print pos (point-max))
+        (goto-char pos)))))
 
 (defun ellm--log-response-error (error)
   "Log the `ERROR' response."
-  (ellm--log error "RESPONSE-ERROR" t))
+  (ellm--log error "RESPONSE-TYPE-ERROR" t))
 
 (defun ellm--log-json-error (error)
-  "Log the `ERROR' response."
+  "Log the `ERROR' when response fails to parse as json."
   (ellm--log error "JSON-ERROR" t))
+
+(defun ellm--log-response-splitting-error (error)
+  "Log the `ERROR' when response fails to split."
+  (ellm--log (format "No title or body in response: %S" error)
+             "RESPONSE-FORMAT-ERROR" t))
 
 (defun ellm--log-http-error (status)
   "Log HTTP `STATUS' errors."
@@ -215,13 +241,12 @@ Will call `json-encode' on `DATA' if
   (ellm--log (plist-get status :redirect) "HTTP-REDIRECT") t)
 
 (defun ellm--log-no-response-body ()
-  "Log when there is no response body."
+  "Log that were no response body."
   (ellm--log "No response body (DNS resolve or TCP error)" "REQUEST-ERROR" t))
 
-(defun ellm--log-response-format-error (response-content)
-  "Log when the `RESPONSE-CONTENT' doesn't split a title."
-  (ellm--log (format "No title or no body in the response content:\n%s" response-content)
-             "RESPONSE-FORMAT-ERROR" t))
+(defun ellm--log-request-headers (headers)
+  "Log the request `HEADERS'."
+  (when ellm-debug-mode (ellm--log headers "REQUEST-HEADERS" t)))
 
 (defun ellm--log-request-body (body)
   "Log the request `BODY'."
@@ -274,7 +299,7 @@ Will call `json-encode' on `DATA' if
     (org-mode . "org"))
   "Alist mapping major modes to Org mode source block languages.")
 
-(defun ellm--make-prompt-maybe-contextual (prompt)
+(defun ellm--maybe-make-prompt-contextual (prompt)
   "Use the active region if any to enhance the `PROMPT' with context.
 If a region is marked, use the `ellm-context-fmt-string' template
 to add context from that region. In that case, the current buffer's
@@ -291,74 +316,126 @@ for determining the language with which to format the context."
   "Create a message with the given ROLE and CONTENT."
   `((role . ,role) (content . ,content)))
 
-(defun ellm--add-user-message (content prompt-data)
-  "Add a user message with `CONTENT' to the `PROMPT-DATA'."
-  (nconc (cdr (assoc 'messages prompt-data))
+(defun ellm--add-system-message (content conversation-data)
+  "Prepend a system message with `CONTENT' to the `CONVERSATION-DATA'."
+  (push (ellm--make-message :system content)
+        (alist-get 'messages conversation-data nil nil)))
+
+(defun ellm--add-user-message (content conversation-data)
+  "Append a user message with `CONTENT' to the `CONVERSATION-DATA'."
+  (nconc (alist-get 'messages conversation-data)
          (list (ellm--make-message :user content))))
 
-(defun ellm--add-assistant-message (content prompt-data)
-  "Add an assistant message with `CONTENT' to the `PROMPT-DATA'.
-We set the title its provide as the new title."
-  (let* ((split-content (ellm--separate-response content))
-         (title (car split-content))
-         (response (cdr split-content)))
-    (unless (and title response)
-      (ellm--log-response-format-error content))
-    (when title
-        (setf (alist-get 'title prompt-data nil nil #'eq) title))
-    (nconc (cdr (assoc 'messages prompt-data))
-           (list (ellm--make-message :assistant (or response content))))))
+(defun ellm--add-assistant-message (content conversation-data)
+  "Append an assistant message with `CONTENT' to the `CONVERSATION-DATA'."
+  (nconc (alist-get 'messages conversation-data)
+         (list (ellm--make-message :assistant content))))
 
-(defun ellm--get-prompt-config-alist ()
-  "Get the current configuration for making an API call."
-  `((temperature . ,ellm-default-temperature)
-    (max_tokens . ,ellm-default-max-tokens)
-    (model . ,ellm-default-model)))
+(defun ellm--add-or-update-title (title conversation-data)
+  "Add or update the `TITLE' in the `CONVERSATION-DATA'.
+A generic `Conversation <TIME>' title is used if `TITLE' is nil."
+  (setf (alist-get 'title conversation-data)
+        (if title title
+          (format "Untitled  %s" (current-time-string)))))
 
-(defun ellm--make-prompt-data-alist (messages &optional max-tokens temperature model)
-  "Create the request object which will be sent to the LLM provider's api.
-Set the MESSAGES, MAX-TOKENS, TEMPERATURE and MODEL to be used."
-  `((messages . ,messages)
-    (temperature . ,(or temperature ellm-default-temperature))
-    (max_tokens . ,(or max-tokens ellm-default-max-tokens))
-    (model . ,(or model ellm-default-model))))
+(defun ellm--handle-assistant-response (response conversation-data)
+  "Add the `RESPONSE' to the `CONVERSATION-DATA'."
+  (let* ((split-response (ellm--split-response response))
+         (title (elt split-response 0))
+         (content (elt split-response 1)))
+    (ellm--add-or-update-title title conversation-data)
+    (ellm--add-assistant-message content conversation-data)))
 
-(defun ellm--prepare-messages (prompt)
-  "Prepare the messages list with a new user message based on PROMPT."
-  (let ((new-user-message (ellm--make-message :user (ellm--make-prompt-maybe-contextual prompt))))
-    (list (ellm--make-message :system ellm-system-message) new-user-message)))
+(defun ellm--split-response (response-content)
+  "Split the `RESPONSE-CONTENT' around a markdown horizontal rule.
 
-(defun ellm--setup-request (prompt-data-alist)
-  "Setup the api request headers and body.
-The `PROMPT-DATA-ALIST' is as returned by `ellm--make-prompt-data-alist'.
-Returns the json encoded request body and the headers,
-as a cons cell."
-  (let* ((request-body (json-encode prompt-data-alist))
-         (bearer-token (concat "Bearer " (ellm-get-openai-api-key)))
-         (request-headers `(("Content-Type" . "application/json") ("Authorization" . ,bearer-token))))
-    (cons request-body request-headers)))
+When response comes in the form of
 
-(defun ellm-chat (prompt &optional max-tokens temperature model)
-  "Send the PROMPT to OpenAI using the marked region as context.
-Optionally set the MAX-TOKENS, TEMPERATURE, and MODEL to be used."
+\"TITLE
+---
+CONTENT\"
+
+this returns both components as the list
+
+`(\"TITLE\" \"CONTENT\")'
+
+When no horizontal rule is found, it sets the title as nil:
+
+`(nil RESPONSE-CONTENT)'.
+
+Note that both components are trimmed of whitespace."
+  (let* ((res (string-split
+               response-content
+               "\n\\(\\*\\{3,\\}\\|\\-\\{3,\\}\\|_\\{3,\\}\\)\n" t "[ \f\t\n\r\v]+")))
+    (when (length= res 1) (push nil res))
+    res))
+
+(defun ellm--initialize-conversation (prompt)
+  "Initialize a new conversation starting with `PROMPT'.
+
+Return the conversation-data alist."
+  (let* ((effective-prompt (ellm--maybe-make-prompt-contextual prompt))
+         (user-message (ellm--make-message :user effective-prompt)))
+    `((messages . (,user-message))
+      (temperature . ,ellm-default-temperature)
+      (max_tokens . ,ellm-default-max-tokens)
+      (model . ,ellm-default-model)
+      (title . nil)
+      (system . ,ellm-system-message))))
+
+(defun ellm--get-model-provider (conversation-data)
+  "Get the provider of the model in `CONVERSATION-DATA'."
+  (alist-get (alist-get 'model conversation-data)
+             ellm-model-providers-alist nil nil #'string=))
+
+(defun ellm--prepare-request-headers (conversation-data)
+  "Prepare the API call headers to send `CONVERSATION-DATA'."
+  (let* ((provider (ellm--get-model-provider conversation-data))
+         (headers
+          (cond ((eq provider 'openai)
+                 `(("Authorization" . ,(concat "Bearer " (funcall ellm-get-openai-api-key)))))
+                ((eq provider 'anthropic)
+                 `(("x-api-key" . ,(funcall ellm-get-anthropic-api-key))
+                   ("anthropic-version" . "2023-06-01")))
+                (t (error "ellm--prepare-request-headers: Unknown provider: %s" (symbol-name provider))))))
+    (setf (alist-get "Content-Type" headers nil nil #'string=) "application/json")
+    headers))
+
+(defun ellm--prepare-request-body (conversation-data)
+  "Prepare the messages list with a new user message based on `CONVERSATION-DATA'."
+  (let ((data (copy-alist conversation-data))
+        (provider (ellm--get-model-provider conversation-data)))
+    (unless (eq provider 'anthropic)
+      (let* ((messages (cl-copy-list (alist-get 'messages data)))
+             (system-message (alist-get 'system data)))
+        (setf (alist-get 'messages data) messages)
+        (ellm--add-system-message system-message data)
+        (setf (alist-get 'system data nil t) nil)))
+    (setf (alist-get 'title data nil t) nil)
+    (json-encode data)))
+
+(defun ellm-chat (prompt &optional current-conversation-data)
+  "Send the PROMPT through to the LLM.
+
+If `CURRENT-CONVERSATION-DATA' is non-nil, continue that conversation."
   (interactive "sEnter your prompt: ")
-  (let* ((messages (ellm--prepare-messages prompt))
-         (prompt-data (ellm--make-prompt-data-alist
-                       messages max-tokens temperature model))
-         (request-setup (ellm--setup-request prompt-data))
-         (request-body (car request-setup))
-         (request-headers (cdr request-setup))
-         (url ellm--openai-api-url)
-         (url-request-method "POST")
-         (url-request-extra-headers request-headers)
-         (url-request-data request-body))
-    (ellm--log-request-body request-body)
-    (url-retrieve url #'ellm--handle-response (list prompt-data))))
+  (let ((conversation-data (if current-conversation-data
+                               current-conversation-data
+                             (ellm--initialize-conversation prompt))))
+    (let* ((request-headers (ellm--prepare-request-headers conversation-data))
+           (request-body (ellm--prepare-request-body conversation-data))
+           (url ellm--openai-api-url)
+           (url-request-method "POST")
+           (url-request-extra-headers request-headers)
+           (url-request-data request-body))
+      (ellm--log-request-headers request-headers)
+      (ellm--log-request-body request-body)
+      (url-retrieve url #'ellm--handle-response (list conversation-data)))))
 
-(defun ellm--handle-response (status prompt-data)
-  "Handle response. Information about the response is contained in STATUS.
-The `PROMPT-DATA' alist include the messages, max-tokens, temperature, and model
-so that we can persist the state of the conversation."
+(defun ellm--handle-response (status conversation-data)
+  "Handle the response to the prompt made using `CONVERSATION-DATA'.
+
+Information about the response is contained in STATUS (see `url-retrieve')."
   (cond ((plist-get status :error)
          (ellm--log-http-error status))
         ((plist-get status :redirect)
@@ -368,9 +445,8 @@ so that we can persist the state of the conversation."
          (if (<= (point-max) (point))
              (ellm--log-no-response-body)
            (let ((parsed-response (ellm--parse-json-response)))
-             ;; (ellm--log parsed-response "PARSED-RESPONSE" t)
              (when parsed-response
-               (ellm--add-response-to-conversation parsed-response prompt-data)))))))
+               (ellm--add-response-to-conversation parsed-response conversation-data)))))))
 
 (defun ellm--parse-json-response ()
   "Parse the JSON response from the API call."
@@ -387,9 +463,8 @@ so that we can persist the state of the conversation."
   "Process the PARSED-RESPONSE from the API call.
 `PROMPT-DATA' includes the messages, max-tokens, temperature, and model"
   (let ((response-content (ellm--extract-response-content-openai parsed-response)))
-    ;; (ellm--log-response-content response-content)
-    (ellm--add-assistant-message response-content prompt-data)
-    ;; (ellm--log-prompt-data prompt-data)
+    (ellm--handle-assistant-response response-content prompt-data)
+    (ellm--log-prompt-data prompt-data)
     (ellm--insert-conversation-into-org prompt-data)))
 
 (defun ellm--extract-response-content-openai (response)
@@ -397,13 +472,12 @@ so that we can persist the state of the conversation."
 This function is meant to be used with the response from the OpenAI API."
   (condition-case error
       (let* ((choices (gethash "choices" response))
-             ;; Note: `aref` is used to access elements of vectors (arrays) in Elisp.
              (first-choice (aref choices 0))
-             (msg (gethash "message" first-choice)))
-        (replace-regexp-in-string "\\\\\"" "\"" (gethash "content" msg)))
-    (wrong-number-of-arguments (ellm--log-response-error error))
-    ;; (:success (replace-regexp-in-string "\\\\\"" "\"" content))
-    ))
+             (msg (gethash "message" first-choice))
+             (content (gethash "content" msg)))
+        (ellm--log-response-content content)
+        (replace-regexp-in-string "\\\\\"" "\"" content))
+    (wrong-type-argument (ellm--log-response-error error))))
 
 (defun ellm--stringify-message (message)
   "Convert the `MESSAGE' to a string.
@@ -413,8 +487,9 @@ is converted to the string
 \"# Role
 content\"."
   (let ((role
-         (capitalize (substring (symbol-name (cdr (assoc 'role message))) 1)))
-        (content (cdr (assoc 'content message)))) (format "# %s\n%s" role content)))
+         (capitalize (substring (symbol-name (alist-get 'role message)) 1)))
+        (content (alist-get 'content message)))
+    (format "# %s\n\n%s" role content)))
 
 (defun ellm--messages-to-markdown-string (messages)
   "Convert the MESSAGES to a markdown string."
@@ -440,48 +515,45 @@ Call CALLBACK with the result."
       (process-send-eof process))))
 
 (defun ellm--markdown-to-org-using-pandoc (markdown-string)
-  "Convert MARKDOWN-STRING from Markdown to Org using Pandoc."
-  (let ((pandoc-command "pandoc -f markdown -t org --shift-heading-level-by=2"))
+  "Convert MARKDOWN-STRING from Markdown to Org using Pandoc.
+
+Note: Doing `--shift-heading-level-by=2' results in depth 4 headings
+most of the time for responses from openai."
+  (let ((pandoc-command "pandoc -f markdown -t org --shift-heading-level-by=1"))
     (with-temp-buffer
       (insert markdown-string)
       (shell-command-on-region (point-min) (point-max) pandoc-command (current-buffer) t ellm--log-buffer-name)
       (buffer-string))))
 
-(defun ellm--separate-response (response-content)
-  "Take the `RESPONSE-CONTENT' string and extract the title.
-Return a cons cell consisting of the title for its =car= and
-the rest of the response for its =cdr=.
-Note: the ~?~ in ~.*?~ makes the match non-greedy, ensuring it stops at the
-first horizontal rule."
-  (when (string-match "\\(.*?\\)--------------\\(.*\\)" response-content)
-    (cons (string-trim (match-string 1 response-content))
-          (string-trim (match-string 2 response-content)))))
-
 (defun ellm--insert-conversation-into-org (prompt-data)
   "Insert the `PROMPT-DATA' into the org file."
-  (let* ((messages (cdr (assoc 'messages prompt-data)))
-         (model (cdr (assoc 'model prompt-data)))
-         (temperature (cdr (assoc 'temperature prompt-data)))
-         ;; (max-tokens (cdr (assoc 'max_tokens prompt-data)))
+  (let* ((messages (alist-get 'messages prompt-data))
+         (title (alist-get 'title prompt-data))
+         (model (alist-get 'model prompt-data))
+         (temperature (alist-get 'temperature prompt-data))
          (buffer (find-file-noselect ellm--conversations-file))
          (markdown-formatted-messages
           (ellm--messages-to-markdown-string messages))
          (org-formatted-messages
           (ellm--markdown-to-org-using-pandoc markdown-formatted-messages)))
-    ;; (ellm--log-markdown-messages markdown-formatted-messages)
-    ;; (ellm--log-org-messages org-formatted-messages)
+    (ellm--log-markdown-messages markdown-formatted-messages)
+    (ellm--log-org-messages org-formatted-messages)
     (with-current-buffer buffer
+      (org-mode)
+      (goto-char (point-min))
+      (org-overview)
+      (org-insert-heading)
       (save-excursion
-        (org-mode)
-        (goto-char (point-min))
-        (org-insert-heading)
-        (insert "Conversation " (current-time-string) "\n")
+        (insert title)
+        (newline)
         (org-id-get-create)
         (org-set-property "Timestamp" (format-time-string "%Y-%m-%d %H:%M:%S"))
         (org-set-property "Model" model)
         (org-set-property "Temperature" (number-to-string temperature))
         (insert org-formatted-messages)
+        (insert "--------------")
         (save-buffer)
+        (org-goto-line 4)
         (display-buffer (current-buffer))))))
 
 (defun ellm--get-first-heading-id ()
@@ -506,7 +578,7 @@ first horizontal rule."
                     (messages (progn
                                 (ellm--get-messages-from-org-entry))))
                 `(("props" . ,props) ("messages" . ,messages))))
-          (ellm--log-error (format "\"Conversation with ID %s not found\"" id) "ERROR"))))))
+          (ellm--log (format "\"Conversation with ID %s not found\"" id) "ERROR"))))))
 
 (defun ellm--get-properties (id)
   "Retrieve and process properties for a given ID."
@@ -553,18 +625,17 @@ first horizontal rule."
 (defun ellm-toggle-test-mode ()
   "Set LLM parameters to lowest token cost for testing purposes."
   (interactive)
-  (let ((test-mode (< ellm-default-max-tokens 20)))
-    (if test-mode
-        (and
-         (setq ellm-default-max-tokens 1000
-               ellm-default-model "gpt-4-turbo-preview"
-               ellm--test-mode t)
-         (message "ellm-test-mode disabled"))
-      (and
-        (setq ellm-default-max-tokens 10
-              ellm-default-model "gpt-3.5-turbo"
-              ellm--test-mode nil)
-        (message "ellm-test-mode enabled")))))
+  (if ellm--test-mode
+    (progn
+      (setq ellm-default-max-tokens 1000
+            ellm-default-model "gpt-4-turbo-preview"
+            ellm--test-mode nil)
+      (message "ellm-test-mode disabled"))
+    (progn
+      (setq ellm-default-max-tokens 10
+            ellm-default-model "gpt-3.5-turbo"
+            ellm--test-mode t)
+      (message "ellm-test-mode enabled"))))
 
 (define-minor-mode ellm-mode
   "Minor mode for interacting with LLMs."
