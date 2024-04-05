@@ -159,14 +159,14 @@ See `ellm--make-context-message' for usage details."
 (defun ellm-set-provider (&optional provider)
   "Set the API `PROVIDER' to use."
   (interactive)
-  (setq ellm-provider
-        (if provider provider
-          (intern (completing-read "Choose provider: " '(openai anthropic)))
-          ellm-model (alist-get ellm-model-size
-                                        (if (eq ellm-provider 'openai)
-                                            ellm--openai-models-alist
-                                          ellm--anthropic-models-alist))))
-  (message "...provider set to %s..." ellm-provider))
+  (let ((p (if provider (intern provider)
+             (intern (completing-read "Choose provider: " '(openai anthropic))))))
+    (setq ellm-model (alist-get ellm-model-size
+                                (if (eq p 'openai)
+                                    ellm--openai-models-alist
+                                  ellm--anthropic-models-alist))
+          ellm-provider p)
+    (message "...provider set to %s..." ellm-provider)))
 
 (defun ellm-set-model-size (&optional model-size)
     "Set the `MODEL-SIZE' to use."
@@ -598,9 +598,10 @@ most of the time for responses from openai."
         (ellm--insert-heading-and-metadata title model temperature)
         (insert org-formatted-messages)
         (insert "\n--------------\n")
-        (save-buffer))
-      (display-buffer buffer)
-      (org-goto-line 4))))
+        (save-buffer)
+        (goto-char (point-min))
+        (org-goto-first-child)
+        (display-buffer (current-buffer) t)))))
 
 (defun ellm--convert-messages-to-org (messages)
   "Convert MESSAGES to an Org-formatted string using Pandoc."
