@@ -25,6 +25,7 @@
 (require 'org-id)
 (require 'org-element)
 (require 'org-fold)
+(require 'savehist)
 
 (require 'markdown-mode)
 
@@ -57,18 +58,33 @@
   :group 'ellm)
 
 (defcustom ellm-provider 'openai
-  "Default provider to use for API calls."
+  "The provider to use for API calls."
   :type '(choice
           (const :tag "OpenAI" openai)
           (const :tag "Anthropic" anthropic))
   :group 'ellm)
 
 (defcustom ellm-model-size 'big
-  "Default model size to use for API calls."
+  "The model size to use for API calls."
   :type '(choice
           (const :tag "Big" big)
           (const :tag "Medium" medium)
           (const :tag "Small" small))
+  :group 'ellm)
+
+(defcustom ellm-model "gpt-4-turbo-preview"
+  "The model to use when making a prompt."
+  :type 'string
+  :group 'ellm)
+
+(defcustom ellm-temperature 0.2
+  "The temperature to use when making a prompt."
+  :type 'float
+  :group 'ellm)
+
+(defcustom ellm-max-tokens 1000
+  "The temperature to use when making a prompt."
+  :type 'integer
   :group 'ellm)
 
 (defcustom ellm--openai-models-alist `((big . "gpt-4-turbo-preview")
@@ -94,29 +110,6 @@
   :type 'alist
   :group 'ellm)
 
-(defcustom ellm-default-prompt-params '((provider "openai"
-                                         model 'big
-                                         temperature 0.2
-                                         max-tokens 800))
-  "The default configuration to use when making a prompt."
-  :type 'list
-  :group 'ellm)
-
-(defcustom ellm-default-model "gpt-3.5-turbo" ;; "gpt-4-turbo-preview"
-  "The default model to use when making a prompt."
-  :type 'string
-  :group 'ellm)
-
-(defcustom ellm-default-temperature 0.2
-  "The default temperature to use when making a prompt."
-  :type 'float
-  :group 'ellm)
-
-(defcustom ellm-default-max-tokens 1000
-  "The default temperature to use when making a prompt."
-  :type 'integer
-  :group 'ellm)
-
 (defcustom ellm-time-format-string "%r"
   "The format string to use with `format-time-string' for displaying conversations."
   :type 'string
@@ -129,9 +122,6 @@
 
 (defvar ellm--test-mode nil
   "If non-nil, set LLM parameters to lowest token cost for testing purposes.")
-
-(defvar ellm--mock-response nil
-  "If non-nil, use a mock response instead of making an API call.")
 
 (defcustom ellm-system-message "Your goal is to execute the user's task, using **all** \
 of the CONTEXT the user provides.
@@ -166,40 +156,104 @@ See `ellm--make-context-message' for usage details."
   "Get the Anthropic API key from the environment."
   (getenv "ANTHROPIC_API_KEY"))
 
-(defun ellm-set-provider ()
-    "Set the API provider for My-Package."
-    (interactive)
-    (setq ellm-provider
-          (intern (completing-read "Choose provider: " '(openai anthropic))))
-    (message "...provider set to %s..." ellm-provider))
+(defun ellm-set-provider (&optional provider)
+  "Set the API `PROVIDER' to use."
+  (interactive)
+  (setq ellm-provider
+        (if provider provider
+          (intern (completing-read "Choose provider: " '(openai anthropic)))
+          ellm-model (alist-get ellm-model-size
+                                        (if (eq ellm-provider 'openai)
+                                            ellm--openai-models-alist
+                                          ellm--anthropic-models-alist))))
+  (message "...provider set to %s..." ellm-provider))
 
-(defun ellm-set-model-size ()
-    "Set the API provider for My-Package."
+(defun ellm-set-model-size (&optional model-size)
+    "Set the `MODEL-SIZE' to use."
     (interactive)
     (setq ellm-model-size
-          (intern (completing-read "Choose model size: " '(big medium small))))
+          (if model-size model-size
+            (intern (completing-read "Choose model size: " '(big medium small)))))
     (let ((models-alist (if (eq ellm-provider 'openai)
                             ellm--openai-models-alist
                           ellm--anthropic-models-alist)))
-      (setq ellm-default-model (cdr (assoc ellm-model-size models-alist)))
-      (message "...model set to %s..." ellm-default-model)))
+      (setq ellm-model (cdr (assoc ellm-model-size models-alist)))
+      (message "...model set to %s..." ellm-model)))
 
-(defun ellm-set-max-tokens (max-tokens)
+(defun ellm--validation-max-tokens (max-tokens)
+  "Validate the `MAX-TOKENS' value."
+  (and (integerp max-tokens) (>= max-tokens 1) (<= max-tokens 4096)))
+
+(defun ellm-set-max-tokens (&optional max-tokens)
   "Set the `MAX-TOKENS' to use for the LLM prompt."
-  (interactive "nMax tokens (between 1 and 4096): ")
-  (cond ((and (integerp max-tokens)
-           (and (>= max-tokens 1) (<= max-tokens 4096)))
-         (setq ellm-default-max-tokens max-tokens)
-         (message "...max-tokens set to %d..." max-tokens))
-        (t (message "Error: Invalid input: %s" max-tokens))))
+  (interactive)
+  (if (called-interactively-p 'any)
+    (let (mt)
+      (while (not (and (setq mt (read-number "Max tokens (between 1 and 4096): "))
+                       (ellm--validation-max-tokens mt)))
+        (message "Error: Invalid max-tokens value: %s" mt))
+      (and (setq ellm-max-tokens mt)
+           (message "...max-tokens set to %d..." ellm-max-tokens)))
+    (if (ellm--validation-max-tokens max-tokens)
+        (setq ellm-max-tokens max-tokens)
+      (error "Invalid argument: `%s' should be integer between 1 and 4096" max-tokens))))
 
-(defun ellm-set-temperature (temperature)
+(defun ellm--validation-temperature (temperature)
+  "Validate the `TEMPERATURE' value."
+  (and (numberp temperature) (>= temperature 0) (<= temperature 2)))
+
+(defun ellm-set-temperature (&optional temperature)
   "Set the `TEMPERATURE' to use for the LLM prompt."
-  (interactive "nTemperature (between 0.0 and 2.0): ")
-  (cond ((and (>= temperature 0) (<= temperature 2))
-         (setq ellm-default-temperature temperature)
-         (message "...temperature set to %.1f..." temperature))
-        (t (message "Error: Invalid input: %s" temperature))))
+  (interactive)
+  (if (called-interactively-p 'any)
+   (let (temp)
+     (while (not (and (setq temp (read-number "Temperature (between 0.0 and 2.0): "))
+                      (ellm--validation-temperature temp)))
+       (message "Error: Invalid temperature value: %s" temp))
+     (and (setq ellm-temperature temp)
+           (message "...temperature set to %s..." ellm-temperature)))
+   (if (ellm--validation-max-tokens temperature)
+       (setq ellm-temperature temperature)
+     (error "Invalid argument: `%s' should be number between 0 and 2" temperature))))
+
+(defun ellm-set-config (setting-function)
+  "Call the `SETTING-FUNCTION' according to the user's choice."
+  (interactive (list (ellm--set-config-prompt)))
+  (funcall-interactively setting-function))
+
+(defun ellm--set-config-prompt ()
+  "Prompt the user to choose a setting to configure."
+  (let ((choices `((,(ellm--provider-description) . ellm-set-provider)
+                   (,(ellm--model-size-description) . ellm-set-model-size)
+                   (,(ellm--temperature-description) . ellm-set-temperature)
+                   (,(ellm--max-tokens-description) . ellm-set-max-tokens))))
+    (alist-get
+     (completing-read "Choose a setting to configure: " (mapcar 'car choices))
+     choices nil nil 'equal)))
+
+(defun ellm--provider-description ()
+  "Return a string describing the current provider."
+  (format "Provider         %s"
+          (propertize (symbol-name ellm-provider)
+                      'face 'font-lock-string-face)))
+
+(defun ellm--model-size-description ()
+  "Return a string describing the current model size."
+  (format "Model size       %s"
+          (propertize (symbol-name ellm-model-size)
+                      'face 'font-lock-string-face)))
+
+(defun ellm--temperature-description ()
+  "Return a string describing the current temperature."
+  (format "Temperature      %s"
+          (propertize (number-to-string ellm-temperature)
+                      'face 'font-lock-number-face)))
+
+(defun ellm--max-tokens-description ()
+  "Return a string describing the current max tokens."
+  (format "Max Tokens       %s"
+          (propertize (number-to-string ellm-max-tokens)
+                      'face 'font-lock-number-face)))
 
 (defun ellm--log (data &optional label should-encode-to-json)
   "Log `DATA' with an optional `LABEL'.
@@ -377,9 +431,9 @@ Return the conversation-data alist."
   (let* ((effective-prompt (ellm--maybe-make-prompt-contextual prompt))
          (user-message (ellm--make-message :user effective-prompt)))
     `((messages . (,user-message))
-      (temperature . ,ellm-default-temperature)
-      (max_tokens . ,ellm-default-max-tokens)
-      (model . ,ellm-default-model)
+      (temperature . ,ellm-temperature)
+      (max_tokens . ,ellm-max-tokens)
+      (model . ,ellm-model)
       (title . nil)
       (system . ,ellm-system-message))))
 
@@ -518,25 +572,6 @@ content\"."
   "Convert the MESSAGES to a markdown string."
   (mapconcat #'ellm--stringify-message messages "\n\n"))
 
-(defun ellm--markdown-to-org (markdown-string callback)
-  "Convert MARKDOWN-STRING to `org-mode' format using pandoc.
-Call CALLBACK with the result."
-  (let ((process-connection-type nil)) ; Use a pipe
-    (let ((process (make-process
-                    :name "markdown-to-org"
-                    :buffer "*markdown-to-org*"
-                    :stderr (get-buffer-create "*markdown-to-org-error-logs*")
-                    :command '("/usr/bin/pandoc" "-f" "markdown" "-t" "org" "--shift-heading-level-by=2")
-                    :sentinel
-                    (lambda (proc event)
-                      (when (string= event "finished\n")
-                        (with-current-buffer (process-buffer proc)
-                          (let ((output (buffer-string)))
-                            (funcall callback output))
-                          (kill-buffer (process-buffer proc))))))))
-      (process-send-string process markdown-string)
-      (process-send-eof process))))
-
 (defun ellm--markdown-to-org-sync (markdown-string)
   "Convert MARKDOWN-STRING from Markdown to Org using Pandoc.
 
@@ -660,26 +695,31 @@ most of the time for responses from openai."
   (interactive)
   (if ellm--test-mode
     (progn
-      (setq ellm-default-max-tokens 1000
-            ellm-default-model "gpt-4-turbo-preview"
+      (setq ellm-max-tokens 1000
+            ellm-model "gpt-4-turbo-preview"
             ellm--test-mode nil)
       (message "ellm-test-mode disabled"))
     (progn
-      (setq ellm-default-max-tokens 10
-            ellm-default-model "gpt-3.5-turbo"
+      (setq ellm-max-tokens 10
+            ellm-model "gpt-3.5-turbo"
             ellm--test-mode t)
       (message "ellm-test-mode enabled"))))
 
+;;;###autoload
 (define-minor-mode ellm-mode
   "Minor mode for interacting with LLMs."
   :group 'ellm
+  :global t
   :keymap (let ((map (make-sparse-keymap)))
             (define-key map (kbd "C-c ; n") #'ellm-chat)
             (define-key map (kbd "C-c ; t") #'ellm-toggle-test-mode)
-            map)
-  (if ellm-mode
-      (message "ELLM mode enabled")
-    (message "ELLM mode disabled")))
+            (define-key map (kbd "C-c ; c") #'ellm-set-config)
+            map))
+
+;;;###autoload
+(define-globalized-minor-mode global-ellm-mode ellm-mode
+  (lambda ()
+    (ellm-mode 1)))
 
 (provide 'ellm)
 ;;; ellm.el ends here
