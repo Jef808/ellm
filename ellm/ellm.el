@@ -123,11 +123,15 @@
 (defvar ellm--test-mode nil
   "If non-nil, set LLM parameters to lowest token cost for testing purposes.")
 
-(defcustom ellm-system-message "Your goal is to execute the user's task, using **all** \
-of the CONTEXT the user provides.
-You should also ***always*** include a short summary title \
-which describes the discussion for easy navigation through my conversation history. \n \
-Separate it by a horizontal rule (i.e. with three or more dashes) as follows:
+(defcustom ellm-system-message "You are a useful emacs-integrated code editing assistant.
+Your goal is to execute the user's task or precisely answer their questions, using **all** \
+of the CONTEXT they provide (if any).
+You are very cautious when providing information or making a claim, you thus always \
+accompany those with a thorough explanation or justification.
+Moreover, you should ***always*** include a short summary title \
+which describes the discussion for easy navigation through the user's conversation history. \n \
+Separate it by a markdown horizontal rule (i.e. a line consisting of three or more dashes).
+Your answer should thus be formatted as follows:\n\n
 
 {{Your title here}}
 
@@ -331,7 +335,7 @@ Will call `json-encode' on `DATA' if
                "MESSAGES-FOR-ORG-MODE" t)))
 
 (defun ellm--org-pretty-print (org-content)
-  "Pretty print ORG-CONTENT."
+  "Pretty print `ORG-CONTENT'."
   (with-temp-buffer
     (insert org-content)
     (org-mode)
@@ -339,7 +343,7 @@ Will call `json-encode' on `DATA' if
     (buffer-substring-no-properties (point-min) (point-max))))
 
 (defun ellm--markdown-pretty-print (markdown-content)
-  "Pretty print MARKDOWN-CONTENT."
+  "Pretty print `MARKDOWN-CONTENT'."
   (with-temp-buffer
     (insert markdown-content)
     (markdown-mode)
@@ -367,7 +371,7 @@ for determining the language with which to format the context."
    prompt))
 
 (defun ellm--make-message (role content)
-  "Create a message with the given ROLE and CONTENT."
+  "Create a message with the given `ROLE' and `CONTENT'."
   `((role . ,role) (content . ,content)))
 
 (defun ellm--add-system-message (content conversation-data)
@@ -387,7 +391,7 @@ for determining the language with which to format the context."
 
 (defun ellm--add-or-update-title (title conversation-data)
   "Add or update the `TITLE' in the `CONVERSATION-DATA'.
-A generic `Conversation <TIME>' title is used if `TITLE' is nil."
+A generic `Untitled <TIMESTAMP>' title is used if `TITLE' is nil."
   (setf (alist-get 'title conversation-data)
         (if title title
           (format "Untitled  %s" (current-time-string)))))
@@ -496,7 +500,7 @@ If `CURRENT-CONVERSATION-DATA' is non-nil, continue that conversation."
 (defun ellm--handle-response (status conversation-data)
   "Handle the response to the prompt made using `CONVERSATION-DATA'.
 
-Information about the response is contained in STATUS (see `url-retrieve')."
+Information about the response is contained in `STATUS' (see `url-retrieve')."
   (cond ((plist-get status :error)
          (ellm--log-http-error status))
         ((plist-get status :redirect)
@@ -510,7 +514,7 @@ Information about the response is contained in STATUS (see `url-retrieve')."
                (ellm--add-response-to-conversation parsed-response conversation-data)))))))
 
 (defun ellm--parse-json-response ()
-  "Parse the JSON response from the API call."
+  "Parse the json response from the API call."
   (condition-case error
       (let ((response-body
              (string-trim (buffer-substring-no-properties (point) (point-max)))))
@@ -521,8 +525,7 @@ Information about the response is contained in STATUS (see `url-retrieve')."
      nil)))
 
 (defun ellm--add-response-to-conversation (parsed-response prompt-data)
-  "Process the PARSED-RESPONSE from the API call.
-`PROMPT-DATA' includes the messages, max-tokens, temperature, and model"
+  "Process the `PARSED-RESPONSE' from the API call made with config `PROMPT-DATA'."
   (let* ((provider (ellm--get-model-provider prompt-data))
          (response-content (cond ((eq provider 'openai)
                                   (ellm--extract-response-content-openai parsed-response))
@@ -535,7 +538,7 @@ Information about the response is contained in STATUS (see `url-retrieve')."
     (ellm--insert-conversation-into-org prompt-data)))
 
 (defun ellm--extract-response-content-openai (response)
-  "Extract the text from the json RESPONSE.
+  "Extract the text from the json `RESPONSE'.
 This function is meant to be used with the response from the OpenAI API."
   (condition-case error
       (let* ((choices (gethash "choices" response))
@@ -547,7 +550,7 @@ This function is meant to be used with the response from the OpenAI API."
     (wrong-type-argument (ellm--log-response-error error))))
 
 (defun ellm--extract-response-content-anthropic (response)
-  "Extract the text from the json RESPONSE."
+  "Extract the text from the json `RESPONSE'."
   (condition-case error
       (let* ((messages (gethash "content" response))
              (first-message (aref messages 0))
@@ -558,11 +561,15 @@ This function is meant to be used with the response from the OpenAI API."
 
 (defun ellm--stringify-message (message)
   "Convert the `MESSAGE' to a string.
+
 A message of the form
+
   `((role . :role) (content . \"content\"))'
+
 is converted to the string
-\"# Role
-content\"."
+
+  \"# Role
+     content\"."
   (let ((role
          (capitalize (substring (symbol-name (alist-get 'role message)) 1)))
         (content (alist-get 'content message)))
@@ -573,10 +580,7 @@ content\"."
   (mapconcat #'ellm--stringify-message messages "\n\n"))
 
 (defun ellm--markdown-to-org-sync (markdown-string)
-  "Convert MARKDOWN-STRING from Markdown to Org using Pandoc.
-
-Note: Doing `--shift-heading-level-by=2' results in depth 4 headings
-most of the time for responses from openai."
+  "Convert `MARKDOWN-STRING' from Markdown to Org using Pandoc."
   (let ((pandoc-command "pandoc -f markdown -t org --shift-heading-level-by=1"))
     (with-temp-buffer
       (insert markdown-string)
@@ -604,7 +608,7 @@ most of the time for responses from openai."
         (display-buffer (current-buffer) t)))))
 
 (defun ellm--convert-messages-to-org (messages)
-  "Convert MESSAGES to an Org-formatted string using Pandoc."
+  "Convert `MESSAGES' to an Org-formatted string using Pandoc."
   (let ((markdown (ellm--messages-to-markdown-string messages)))
     (ellm--log-markdown-messages markdown)
     (ellm--markdown-to-org-sync markdown)))
@@ -634,7 +638,7 @@ most of the time for responses from openai."
       (org-entry-get (point) "ID"))))
 
 (defun ellm--retrieve-conversation-by-id (id)
-  "Retrieve a conversation by its unique ID along with its properties."
+  "Retrieve a conversation by its unique `ID' along with its properties."
   (with-current-buffer (find-file-noselect ellm--conversations-file)
     (save-excursion
       (goto-char (point-min))
@@ -650,7 +654,7 @@ most of the time for responses from openai."
           (ellm--log (format "\"Conversation with ID %s not found\"" id) "ERROR"))))))
 
 (defun ellm--get-properties (id)
-  "Retrieve and process properties for a given ID."
+  "Retrieve and process properties for a given `ID'."
   (let ((props-alist (ellm--org-get-property-drawer-alist)))
     (list `("ID" . ,id)
           `("Model" . ,(cdr (assoc "Model" props-alist)))
@@ -706,6 +710,38 @@ most of the time for responses from openai."
             ellm--test-mode t)
       (message "ellm-test-mode enabled"))))
 
+(defun ellm-show-conversations ()
+  "Show the conversations in the `ellm--conversations-file'."
+  (interactive)
+  (find-file-other-window ellm--conversations-file)
+  (with-current-buffer ellm--conversations-file
+    (org-mode)
+    (org-overview)))
+
+(defun ellm-next-conversation ()
+  "Move the cursor to the next top-level heading in an Org-mode buffer."
+  (interactive)
+  (when (string= (buffer-file-name) "home/jfa/.llm/conversations.org")
+    (progn
+      (org-next-visible-heading 1)
+      (while (not (looking-at "^\\* "))
+        (org-next-visible-heading 1))
+      (recenter-top-bottom 1))))
+
+(defun ellm--extract-definitions-in-buffer ()
+  "Extract all variable and function definitions in the current buffer."
+  (interactive)
+  (let ((functions '())
+        (variables '()))
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^(defvar|defcustom " nil t)
+        (push `((,(symbol-at-point) . (documentation (symbol-at-point)))) variables))
+      (goto-char (point-min))
+      (while (re-search-forward "^(defun " nil t)
+        (push `((,(symbol-at-point) . ,(documentation (symbol-at-point)))) functions)))
+    `((variables . ,(nreverse variables)) (functions . ,(nreverse functions)))))
+
 ;;;###autoload
 (define-minor-mode ellm-mode
   "Minor mode for interacting with LLMs."
@@ -715,6 +751,7 @@ most of the time for responses from openai."
             (define-key map (kbd "C-c ; n") #'ellm-chat)
             (define-key map (kbd "C-c ; t") #'ellm-toggle-test-mode)
             (define-key map (kbd "C-c ; c") #'ellm-set-config)
+            (define-key map (kbd "C-c ; ;") #'ellm-show-conversations)
             map))
 
 ;;;###autoload
