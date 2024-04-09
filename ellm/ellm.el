@@ -52,6 +52,11 @@
 (defconst ellm--anthropic-api-url "https://api.anthropic.com/v1/messages"
   "The URL to send requests to the OpenAI API.")
 
+(defcustom ellm--temp-conversations-buffer-name "*LLM Conversations*"
+  "The file to store conversation history."
+  :type 'string
+  :group 'ellm)
+
 (defcustom ellm--conversations-file "~/.llm/conversations.org"
   "The file to store conversation history."
   :type 'string
@@ -102,12 +107,17 @@
   :group 'ellm)
 
 (defcustom ellm-model-providers-alist `(("gpt-4-turbo-preview" . openai)
-                                         ("gpt-3.5-turbo" . openai)
-                                         ("claude-3-opus-20240229" . anthropic)
-                                         ("claude-3-sonnet-20240229" . anthropic)
-                                         ("claude-3-haiku-20240307" . anthropic))
+                                        ("gpt-3.5-turbo" . openai)
+                                        ("claude-3-opus-20240229" . anthropic)
+                                        ("claude-3-sonnet-20240229" . anthropic)
+                                        ("claude-3-haiku-20240307" . anthropic))
   "Alist mapping model names to their providers."
   :type 'alist
+  :group 'ellm)
+
+(defcustom ellm-save-conversations t
+  "If non-nil, save the conversation history to `ellm--conversations-file'."
+  :type 'boolean
   :group 'ellm)
 
 (defcustom ellm-time-format-string "%r"
@@ -151,6 +161,16 @@ See `ellm--make-context-message' for usage details."
 
 (defconst ellm--log-buffer-name "*ELLM-Logs*"
   "Log buffer for LLM messages.")
+
+(defun ellm--setup-persistance ()
+  "Register ellm configuration variables with the `savehist' package."
+  (let ((symbols-to-add '(ellm-max-tokens
+                          ellm-model-size
+                          ellm-provider
+                          ellm-temperature
+                          ellm-save-conversations)))
+    (dolist (symbol symbols-to-add)
+      (cl-pushnew symbol savehist-additional-variables))))
 
 (defun ellm--get-openai-api-key-from-env ()
   "Get the OpenAI API key from the environment."
@@ -222,42 +242,61 @@ See `ellm--make-context-message' for usage details."
 
 (defun ellm-set-config (setting-function)
   "Call the `SETTING-FUNCTION' according to the user's choice."
-  (interactive (list (ellm--set-config-prompt)))
+  (interactive (list (ellm--config-prompt)))
   (funcall-interactively setting-function))
 
-(defun ellm--set-config-prompt ()
+(defun ellm--config-prompt ()
   "Prompt the user to choose a setting to configure."
-  (let ((choices `((,(ellm--provider-description) . ellm-set-provider)
-                   (,(ellm--model-size-description) . ellm-set-model-size)
-                   (,(ellm--temperature-description) . ellm-set-temperature)
-                   (,(ellm--max-tokens-description) . ellm-set-max-tokens))))
+  (let ((choices (list
+                  (cons (ellm--toggle-test-mode-description) 'ellm-toggle-test-mode)
+                  (cons (ellm--toggle-save-conversations-description) 'ellm-toggle-save-conversations)
+                  (cons (ellm--provider-description) 'ellm-set-provider)
+                  (cons (ellm--model-size-description) 'ellm-set-model-size)
+                  (cons (ellm--temperature-description) 'ellm-set-temperature)
+                  (cons (ellm--max-tokens-description) 'ellm-set-max-tokens))))
     (alist-get
      (completing-read "Choose a setting to configure: " (mapcar 'car choices))
      choices nil nil 'equal)))
 
 (defun ellm--provider-description ()
   "Return a string describing the current provider."
-  (format "Provider         %s"
+  (format "Provider                        %s"
           (propertize (symbol-name ellm-provider)
                       'face 'font-lock-string-face)))
 
 (defun ellm--model-size-description ()
   "Return a string describing the current model size."
-  (format "Model size       %s"
+  (format "Model size                      %s"
           (propertize (symbol-name ellm-model-size)
                       'face 'font-lock-string-face)))
 
 (defun ellm--temperature-description ()
   "Return a string describing the current temperature."
-  (format "Temperature      %s"
+  (format "Temperature                     %s"
           (propertize (number-to-string ellm-temperature)
                       'face 'font-lock-number-face)))
 
 (defun ellm--max-tokens-description ()
   "Return a string describing the current max tokens."
-  (format "Max Tokens       %s"
+  (format "Max Tokens                      %s"
           (propertize (number-to-string ellm-max-tokens)
                       'face 'font-lock-number-face)))
+
+(defun ellm--toggle-save-conversations-description ()
+  "Return a string describing the current save conversations setting."
+  (format "Save Conversations to file      %s"
+          (propertize (if ellm-save-conversations "t" "nil")
+                      'face (if ellm-save-conversations
+                                'font-lock-builtin-face
+                              'font-lock-comment-face))))
+
+(defun ellm--toggle-test-mode-description ()
+  "Return a string describing the current save conversations setting."
+  (format "Test Mode                       %s"
+          (propertize (if ellm--test-mode "t" "nil")
+                      'face (if ellm--test-mode
+                                'font-lock-builtin-face
+                              'font-lock-comment-face))))
 
 (defun ellm--log (data &optional label should-encode-to-json)
   "Log `DATA' with an optional `LABEL'.
@@ -593,7 +632,9 @@ is converted to the string
          (title (alist-get 'title prompt-data))
          (model (alist-get 'model prompt-data))
          (temperature (alist-get 'temperature prompt-data))
-         (buffer (find-file-noselect ellm--conversations-file))
+         (buffer (if ellm-save-conversations
+                     (find-file-noselect ellm--conversations-file)
+                   (get-buffer-create ellm--temp-conversations-buffer-name)))
          (org-formatted-messages (ellm--convert-messages-to-org messages)))
     (ellm--log-org-messages org-formatted-messages)
     (save-excursion
@@ -602,7 +643,8 @@ is converted to the string
         (ellm--insert-heading-and-metadata title model temperature)
         (insert org-formatted-messages)
         (insert "\n--------------\n")
-        (save-buffer)
+        (when ellm-save-conversations
+          (save-buffer))
         (goto-char (point-min))
         (org-goto-first-child)
         (display-buffer (current-buffer) t)))))
@@ -618,7 +660,8 @@ is converted to the string
   (org-insert-heading)
   (insert title)
   (newline)
-  (org-id-get-create)
+  (when ellm-save-conversations
+    (org-id-get-create))
   (org-set-property "Timestamp" (format-time-string "%Y-%m-%d %H:%M:%S"))
   (org-set-property "Model" model)
   (org-set-property "Temperature" (number-to-string temperature)))
@@ -696,19 +739,28 @@ is converted to the string
       properties)))
 
 (defun ellm-toggle-test-mode ()
-  "Set LLM parameters to lowest token cost for testing purposes."
+  "Set LLM parameters to lowest token cost for testing purposes.
+
+When togling off, restore the previously set values."
   (interactive)
   (if ellm--test-mode
     (progn
-      (setq ellm-max-tokens 1000
-            ellm-model "gpt-4-turbo-preview"
-            ellm--test-mode nil)
-      (message "ellm-test-mode disabled"))
+      (ellm-set-max-tokens (get 'ellm-max-tokens 'previous-value))
+      (ellm-set-model-size (get 'ellm-model-size 'previous-value))
+      (setq ellm-save-conversations (get 'ellm-save-conversations 'previous-value))
+      (put 'ellm-max-tokens 'previous-value nil)
+      (put 'ellm-model-size 'previous-value nil)
+      (setq ellm--test-mode nil)
+      (message "...ellm-test-mode disabled..."))
     (progn
-      (setq ellm-max-tokens 10
-            ellm-model "gpt-3.5-turbo"
-            ellm--test-mode t)
-      (message "ellm-test-mode enabled"))))
+      (put 'ellm-max-tokens 'previous-value (symbol-value 'ellm-max-tokens))
+      (put 'ellm-model-size 'previous-value (symbol-value 'ellm-model-size))
+      (put 'ellm-save-conversations 'previous-value (symbol-value 'ellm-save-conversations))
+      (ellm-set-max-tokens 10)
+      (ellm-set-model-size 'small)
+      (setq ellm-save-conversations nil)
+      (setq ellm--test-mode t)
+      (message "...ellm-test-mode enabled..."))))
 
 (defun ellm-show-conversations ()
   "Show the conversations in the `ellm--conversations-file'."
@@ -717,6 +769,11 @@ is converted to the string
   (with-current-buffer ellm--conversations-file
     (org-mode)
     (org-overview)))
+
+(defun ellm-toggle-save-conversations ()
+  "Toggle saving conversations to `ellm--conversations-file'."
+  (interactive)
+  (setq ellm-save-conversations (not ellm-save-conversations)))
 
 (defun ellm-next-conversation ()
   "Move the cursor to the next top-level heading in an Org-mode buffer."
@@ -742,6 +799,14 @@ is converted to the string
         (push `((,(symbol-at-point) . ,(documentation (symbol-at-point)))) functions)))
     `((variables . ,(nreverse variables)) (functions . ,(nreverse functions)))))
 
+(defun ellm-fold-conversations-buffer ()
+  "Fold all conversations in the `ellm--conversations-file'."
+  (interactive)
+  (with-current-buffer (get-file-buffer ellm--conversations-file)
+    (save-excursion
+      (goto-char (point-min))
+      (org-overview))))
+
 ;;;###autoload
 (define-minor-mode ellm-mode
   "Minor mode for interacting with LLMs."
@@ -752,11 +817,14 @@ is converted to the string
             (define-key map (kbd "C-c ; t") #'ellm-toggle-test-mode)
             (define-key map (kbd "C-c ; c") #'ellm-set-config)
             (define-key map (kbd "C-c ; ;") #'ellm-show-conversations)
+            (define-key map (kbd "C-c ; s") #'ellm-toggle-save-conversations)
+            (define-key map (kbd "C-c ; o") #'ellm-fold-conversations-buffer)
             map))
 
 ;;;###autoload
 (define-globalized-minor-mode global-ellm-mode ellm-mode
   (lambda ()
+    (ellm--setup-persistance)
     (ellm-mode 1)))
 
 (provide 'ellm)
