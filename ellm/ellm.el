@@ -125,7 +125,7 @@
   :type 'string
   :group 'ellm)
 
-(defcustom ellm-debug-mode nil
+(defcustom ellm--debug-mode nil
   "If non nil, log each request and response to the `ellm--log-buffer-name' buffer."
   :type 'boolean
   :group 'ellm)
@@ -252,6 +252,7 @@ See `ellm--make-context-message' for usage details."
   (let ((choices (list
                   (cons (ellm--toggle-test-mode-description) 'ellm-toggle-test-mode)
                   (cons (ellm--toggle-save-conversations-description) 'ellm-toggle-save-conversations)
+                  (cons (ellm--toggle-debug-mode-description) 'ellm-toggle-debug-mode)
                   (cons (ellm--provider-description) 'ellm-set-provider)
                   (cons (ellm--model-size-description) 'ellm-set-model-size)
                   (cons (ellm--temperature-description) 'ellm-set-temperature)
@@ -300,6 +301,14 @@ See `ellm--make-context-message' for usage details."
                                 'font-lock-builtin-face
                               'font-lock-comment-face))))
 
+(defun ellm--toggle-debug-mode-description ()
+  "Return a string describing the current debug mode setting."
+  (format "Debug Mode                      %s"
+          (propertize (if ellm--debug-mode "t" "nil")
+                      'face (if ellm--debug-mode
+                                'font-lock-builtin-face
+                              'font-lock-comment-face))))
+
 (defun ellm--log (data &optional label should-encode-to-json)
   "Log `DATA' with an optional `LABEL'.
 Will call `json-encode' on `DATA' if
@@ -345,33 +354,33 @@ Will call `json-encode' on `DATA' if
 
 (defun ellm--log-request-headers (headers)
   "Log the request `HEADERS'."
-  (when ellm-debug-mode (ellm--log headers "REQUEST-HEADERS" t)))
+  (when ellm--debug-mode (ellm--log headers "REQUEST-HEADERS" t)))
 
 (defun ellm--log-request-body (body)
   "Log the request `BODY'."
-  (when ellm-debug-mode (ellm--log body "REQUEST-BODY")))
+  (when ellm--debug-mode (ellm--log body "REQUEST-BODY")))
 
 (defun ellm--log-response-body (response-body)
   "Log the `RESPONSE-BODY'."
-  (when ellm-debug-mode (ellm--log response-body "RESPONSE-BODY")))
+  (when ellm--debug-mode (ellm--log response-body "RESPONSE-BODY")))
 
 (defun ellm--log-response-content (response-content)
   "Log the `RESPONSE-CONTENT'."
-  (when ellm-debug-mode (ellm--log response-content "RESPONSE-CONTENT" t)))
+  (when ellm--debug-mode (ellm--log response-content "RESPONSE-CONTENT" t)))
 
 (defun ellm--log-prompt-data (prompt-data)
   "Log the `PROMPT-DATA'."
-  (when ellm-debug-mode (ellm--log prompt-data "PROMPT-DATA" t)))
+  (when ellm--debug-mode (ellm--log prompt-data "PROMPT-DATA" t)))
 
 (defun ellm--log-markdown-messages (markdown-string)
   "Log `MARKDOWN-STRING'."
-  (when ellm-debug-mode
+  (when ellm--debug-mode
     (ellm--log (ellm--markdown-pretty-print markdown-string)
                "MESSAGES-FOR-MARKDOWN" t)))
 
 (defun ellm--log-org-messages (org-string)
   "Log `ORG-STRING'."
-  (when ellm-debug-mode
+  (when ellm--debug-mode
     (ellm--log (ellm--org-pretty-print org-string)
                "MESSAGES-FOR-ORG-MODE" t)))
 
@@ -641,15 +650,14 @@ is converted to the string
     (ellm--log-org-messages org-formatted-messages)
     (save-excursion
       (with-current-buffer buffer
-        (ellm--prepare-org-buffer)
+        (read-only-mode -1)
         (ellm--insert-heading-and-metadata title model temperature)
         (insert org-formatted-messages)
         (insert "\n--------------\n")
         (when ellm-save-conversations
           (save-buffer))
-        (goto-char (point-min))
-        (org-goto-first-child)
-        (display-buffer (current-buffer) t)))))
+        (read-only-mode 1)
+        (ellm--display-org-buffer)))))
 
 (defun ellm--convert-messages-to-org (messages)
   "Convert `MESSAGES' to an Org-formatted string using Pandoc."
@@ -659,20 +667,28 @@ is converted to the string
 
 (defun ellm--insert-heading-and-metadata (title model temperature)
   "Insert an Org heading with TITLE, MODEL, and TEMPERATURE as properties."
+  (goto-char (point-min))
   (org-insert-heading)
   (insert title)
-  (newline)
+  ;; (newline)
   (when ellm-save-conversations
     (org-id-get-create))
   (org-set-property "Timestamp" (format-time-string "%Y-%m-%d %H:%M:%S"))
   (org-set-property "Model" model)
   (org-set-property "Temperature" (number-to-string temperature)))
 
-(defun ellm--prepare-org-buffer ()
-  "Prepare BUFFER for insertion by setting Org mode and showing an overview."
+(defun ellm--display-org-buffer ()
+  "Prepare the conversations buffer for viewing."
   (org-mode)
+  (org-overview)
+  (ellm--goto-first-top-level-heading)
+  (org-fold-show-subtree)
+  (display-buffer (current-buffer) t))
+
+(defun ellm--goto-first-top-level-heading ()
+  "Go to the first top-level heading in the current buffer."
   (goto-char (point-min))
-  (org-overview))
+  (org-goto-first-child))
 
 (defun ellm--get-first-heading-id ()
   "Retrieve the ID of the first top-level heading of file at ORG-FILE-PATH."
@@ -764,6 +780,12 @@ When togling off, restore the previously set values."
       (setq ellm--test-mode t)
       (message "...ellm-test-mode enabled..."))))
 
+(defun ellm-toggle-debug-mode ()
+  "Toggle debug mode."
+  (interactive)
+  (setq ellm--debug-mode (not ellm--debug-mode))
+  (message "...debug mode %s..." (if ellm--debug-mode "enabled" "disabled")))
+
 (defun ellm-show-conversations ()
   "Show the conversations in the `ellm--conversations-file'."
   (interactive)
@@ -805,9 +827,9 @@ When togling off, restore the previously set values."
   "Fold all conversations in the `ellm--conversations-file'."
   (interactive)
   (with-current-buffer (get-file-buffer ellm--conversations-file)
-    (save-excursion
-      (goto-char (point-min))
-      (org-overview))))
+    (goto-char (point-min))
+    (org-overview)
+    (ellm--goto-first-top-level-heading)))
 
 ;;;###autoload
 (define-minor-mode ellm-mode
