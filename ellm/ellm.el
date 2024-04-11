@@ -240,10 +240,12 @@ See `ellm--make-context-message' for usage details."
        (setq ellm-temperature temperature)
      (error "Invalid argument: `%s' should be number between 0 and 2" temperature))))
 
-(defun ellm-set-config (setting-function)
+(defun ellm-set-config ()
   "Call the `SETTING-FUNCTION' according to the user's choice."
-  (interactive (list (ellm--config-prompt)))
-  (funcall-interactively setting-function))
+  (interactive)
+  (let (setting-function)
+    (while (setq setting-function (ellm--config-prompt))
+      (funcall-interactively setting-function))))
 
 (defun ellm--config-prompt ()
   "Prompt the user to choose a setting to configure."
