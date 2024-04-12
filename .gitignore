@@ -53,4 +53,7 @@ flycheck_*.el
 
 
 # End of https://www.toptal.com/developers/gitignore/api/emacs
-n
+nellm/*.jpeg
+notes.org
+todo.org
+data/
