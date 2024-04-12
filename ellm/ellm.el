@@ -133,15 +133,16 @@
 (defvar ellm--test-mode nil
   "If non-nil, set LLM parameters to lowest token cost for testing purposes.")
 
-(defcustom ellm-system-message "You are a useful emacs-integrated code editing assistant.
-Your goal is to execute the user's task or precisely answer their questions, using **all** \
-of the CONTEXT they provide (if any).
+(defcustom ellm-system-message "You are a useful emacs-integrated general assistant.
+Your goal is to execute the user's task or precisely answer their questions, using all \
+the CONTEXT the user provides (if any).
 You are very cautious when providing information or making a claim, you thus always \
-accompany those with a thorough explanation or justification.
-Moreover, you should ***always*** include a short summary title \
-which describes the discussion for easy navigation through the user's conversation history. \n \
-Separate it by a markdown horizontal rule (i.e. a line consisting of three or more dashes).
-Your answer should thus be formatted as follows:\n\n
+accompany your answer with a thorough explanation or justification when it is not obvious.
+Note that users would always prefer you answering with clarifications and questions when you are unsure, \
+they will provide the relevant context afterwards so that you can accomplish your task.
+Finally, you should include a short summary title which describes the discussion, so that the user
+can later navigate through their history. Separate the summary title by a markdown horizontal \
+rule (i.e. a line consisting of three or more dashes). Your answer should thus be formatted as follows:\n\n
 
 {{Your title here}}
 
@@ -243,9 +244,13 @@ See `ellm--make-context-message' for usage details."
 (defun ellm-set-config ()
   "Call the `SETTING-FUNCTION' according to the user's choice."
   (interactive)
-  (let (setting-function)
-    (while (setq setting-function (ellm--config-prompt))
-      (funcall-interactively setting-function))))
+  (let ((minibuffer-local-map (copy-keymap minibuffer-local-map))
+        (setting-function))
+    (define-key minibuffer-local-map (kbd "q") 'keyboard-quit)
+    (let ((minibuffer-allow-text-properties t)
+          (minibuffer-local-map minibuffer-local-map))
+      (while (setq setting-function (ellm--config-prompt))
+        (funcall-interactively setting-function)))))
 
 (defun ellm--config-prompt ()
   "Prompt the user to choose a setting to configure."
@@ -256,10 +261,14 @@ See `ellm--make-context-message' for usage details."
                   (cons (ellm--provider-description) 'ellm-set-provider)
                   (cons (ellm--model-size-description) 'ellm-set-model-size)
                   (cons (ellm--temperature-description) 'ellm-set-temperature)
-                  (cons (ellm--max-tokens-description) 'ellm-set-max-tokens))))
-    (alist-get
-     (completing-read "Choose a setting to configure: " (mapcar 'car choices))
-     choices nil nil 'equal)))
+                  (cons (ellm--max-tokens-description) 'ellm-set-max-tokens)))
+        (minibuffer-local-map (copy-keymap minibuffer-local-map)))
+    (define-key minibuffer-local-map (kbd "q") 'abort-recursive-edit)
+    (let ((minibuffer-allow-text-properties t)
+          (minibuffer-local-map minibuffer-local-map))
+      (alist-get
+       (completing-read "Choose a setting to configure: " (mapcar 'car choices))
+       choices nil nil 'equal))))
 
 (defun ellm--provider-description ()
   "Return a string describing the current provider."
@@ -689,6 +698,18 @@ is converted to the string
   "Go to the first top-level heading in the current buffer."
   (goto-char (point-min))
   (org-goto-first-child))
+
+(defun ellm--resume-conversation ()
+  "Resume the conversation at the current point."
+  (interactive)
+  (org-element-map (org-element-parse-buffer) 'headline
+    (lambda (hl)
+      (let ((props (org-element-property :ID hl)))
+        (when props
+          (cons (concat (org-element-property :raw-value hl) " [" props "]") hl))))
+    nil 'first-match))
+  ;; (let ((id (org-entry-get (point) "ID")))
+  ;;   (ellm--retrieve-conversation-by-id id)))
 
 (defun ellm--get-first-heading-id ()
   "Retrieve the ID of the first top-level heading of file at ORG-FILE-PATH."
