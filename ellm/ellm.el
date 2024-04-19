@@ -509,48 +509,49 @@ Information about the response is contained in `STATUS' (see `url-retrieve')."
     (ellm--log-conversation conversation)
     (ellm--insert-conversation-into-org conversation)))
 
-(defun ellm--insert-conversation (conversation)
-  "Insert the `CONVERSATION' object into the current buffer."
-  (with-current-buffer (find-file-noselect ellm--conversations-file)
-    (read-only-mode -1)
-    (goto-char (point-min))
-    (org-goto-first-child)
-    (goto-char (- (point) 1))
-    (unless (bolp) (newline))
-    (save-excursion
-      (insert (org-element-interpret-data conversation)))
-    (read-only-mode 1)))
+(defun ellm--handle-assistant-response (response conversation)
+  "Add the `RESPONSE' to the `CONVERSATION'."
+  (let* ((split-response (ellm--split-response response))
+         (title (elt split-response 0))
+         (content (elt split-response 1)))
+    (ellm--add-or-update-title title conversation)
+    (ellm--add-assistant-message content conversation)))
 
-(defun ellm--fix-timestamps ()
-  "Remove the :Timestamp: property and instead add it to the heading title."
-  (with-current-buffer (find-file-noselect ellm--conversations-file)
-    (read-only-mode -1)
-    (org-map-entries
-     (lambda ()
-       (let* ((case-fold-search t)
-              (text (when (string-match ":PROPERTIES:\\(.*\\):END:"
-                                        (buffer-substring-no-properties (point) (re-search-forward ":END:")))
-                      (match-string 1 text)))
-              (time (when (string-match ":Timestamp:\\s-+\\(.*\\)" text)
-                      (match-string 1 text))))
-         (when time
-           (org-back-to-heading)
-           (end-of-line)
-           (insert "  ")
-           (org-insert-time-stamp (org-read-date nil t time) t t)))
-       (re-search-forward ":Timestamp:")
-       (delete-line)
-       (read-only-mode 1)))))
+(defun ellm--insert-conversation-into-org (conversation)
+  "Insert the `CONVERSATION' into the org file."
+  (let* ((messages (alist-get 'messages conversation))
+         (title (alist-get 'title conversation))
+         (model (alist-get 'model conversation))
+         (temperature (alist-get 'temperature conversation))
+         (id (alist-get 'id conversation))
+         (buffer (if ellm-save-conversations
+                     (find-file-noselect ellm--conversations-file)
+                   (get-buffer-create ellm--temp-conversations-buffer-name)))
+         (org-formatted-messages (ellm--convert-messages-to-org messages)))
+    (ellm--log-org-messages org-formatted-messages)
+    (with-current-buffer buffer
+      (org-mode)
+      (read-only-mode -1)
+      (save-excursion
+        (if-let ((pos (and ellm-save-conversations (org-id-find id 'marker))))
+            (progn (goto-char pos)
+                   (org-cut-subtree))
+          (setq id (or id (org-id-new))))
+        (goto-char (point-min))
+        (ellm--insert-heading-and-metadata title id model temperature)
+        (insert org-formatted-messages)
+        (when ellm-save-conversations
+          (save-buffer))
+        (read-only-mode 1)
+        (ellm--display-org-buffer)))))
 
-(defun ellm--insert-heading-and-metadata (title model temperature)
-  "Insert an Org heading with TITLE, MODEL, and TEMPERATURE as properties."
-  (goto-char (point-min))
+(defun ellm--insert-heading-and-metadata (title id model temperature)
+  "Insert an Org heading with properties TITLE, ID, MODEL, and TEMPERATURE."
   (org-insert-heading)
   (insert title "  ")
   (org-insert-time-stamp nil t t)
   (newline)
-  (when ellm-save-conversations
-    (org-id-get-create))
+  (org-set-property "ID" id)
   (org-set-property "MODEL" model)
   (org-set-property "TEMPERATURE" (number-to-string temperature)))
 
@@ -587,20 +588,14 @@ This function is meant to be used with the response from the OpenAI API."
         (replace-regexp-in-string "\\\\\"" "\"" content))
     (wrong-type-argument (ellm--log-response-error error))))
 
-(defun ellm--handle-assistant-response (response conversation-data)
-  "Add the `RESPONSE' to the `CONVERSATION-DATA'."
-  (let* ((split-response (ellm--split-response response))
-         (title (elt split-response 0))
-         (content (elt split-response 1)))
-    (ellm--add-or-update-title title conversation-data)
-    (ellm--add-assistant-message content conversation-data)))
-
-(defun ellm--add-or-update-title (title conversation-data)
-  "Add or update the `TITLE' in the `CONVERSATION-DATA'.
+(defun ellm--add-or-update-title (title conversation)
+  "Add or update the `TITLE' in the `CONVERSATION'.
 
 A generic `Untitled <TIMESTAMP>' title is used if `TITLE' is nil."
-  (setf (alist-get 'title conversation-data)
-        (if title title "Untitled")))
+  (let* ((previous-title (alist-get 'title conversation))
+         (new-title (or title previous-title)))
+    (setf (alist-get 'title conversation)
+        (or new-title "Untitled"))))
 
 (defun ellm--split-response (response-content)
   "Split the `RESPONSE-CONTENT' around a markdown horizontal rule.
@@ -626,33 +621,13 @@ Note that both components are trimmed of whitespace."
     (when (length= res 1) (push nil res))
     res))
 
-(defun ellm--insert-conversation-into-org (conversation)
-  "Insert the `CONVERSATION' into the org file."
-  (let* ((messages (alist-get 'messages conversation))
-         (title (alist-get 'title conversation))
-         (model (alist-get 'model conversation))
-         (temperature (alist-get 'temperature conversation))
-         (buffer (if ellm-save-conversations
-                     (find-file-noselect ellm--conversations-file)
-                   (get-buffer-create ellm--temp-conversations-buffer-name)))
-         (org-formatted-messages (ellm--convert-messages-to-org messages)))
-    (ellm--log-org-messages org-formatted-messages)
-    (save-excursion
-      (with-current-buffer buffer
-        (org-mode)
-        (read-only-mode -1)
-        (ellm--insert-heading-and-metadata title model temperature)
-        (insert org-formatted-messages)
-        (when ellm-save-conversations
-          (save-buffer))
-        (read-only-mode 1)
-        (ellm--display-org-buffer)))))
-
 (defun ellm--convert-messages-to-org (messages)
   "Convert `MESSAGES' to an Org-formatted string using Pandoc."
-  (let ((markdown (ellm--messages-to-markdown-string messages)))
-    (ellm--log-markdown-messages markdown)
-    (ellm--markdown-to-org-sync markdown)))
+  (let ((markdown-string (ellm--messages-to-markdown-string messages)))
+    (ellm--log-markdown-messages markdown-string)
+    (let ((org-string (ellm--markdown-to-org-sync markdown-string)))
+      (ellm--log-org-messages org-string)
+      org-string)))
 
 (defun ellm--messages-to-markdown-string (messages)
   "Convert the MESSAGES to a markdown string."
@@ -684,7 +659,11 @@ is converted to the string
       (buffer-string))))
 
 (defun ellm-resume-conversation ()
-  "Resume the conversation at point."
+  "Resume the conversation at point.
+
+When `ellm-save-conversations' is non-nil, the conversation at point
+will be removed from the org document and the updated conversation will
+be inserted at the top of the document."
   (interactive)
   (let ((conversation (ellm--parse-conversation)))
     (setf (alist-get 'system conversation)
@@ -694,23 +673,24 @@ is converted to the string
     (ellm-chat conversation)))
 
 (defun ellm--parse-conversation ()
-  "Parse the current org subtree into a conversation object."
+  "Parse the current org subtree into a conversation object.
+
+Note that any trailing timestamp in the conversation title is removed."
   (let* (result
          (subtree (ellm--conversation-at-point))
          (title (org-element-property :raw-value (car (org-element-contents subtree))))
+         (effective-title (when (string-match org-element--timestamp-regexp title)
+                            (substring title 0 (match-beginning 0))))
          (metadata (ellm--metadata-from-subtree subtree))
          (messages (ellm--messages-from-subtree subtree)))
       (setq result metadata)
-      (push (cons 'title title) result)
+      (push (cons 'title effective-title) result)
       (push (cons 'messages messages) result)
       (push (cons 'system (concat ellm-system-message ellm--system-message-suffix)) result)
       result))
 
 (defun ellm--conversation-at-point ()
-  "Parse the conversation at point in the conversations org file.
-
-Return the value of `CALLBACK' applied to the conversation.
-Pass an `identity' callback to return the conversation org-element."
+  "Return the conversation at point as an org element subtree."
   (unless (or (equal (buffer-name (current-buffer)) ellm--temp-conversations-buffer-name)
               (f-equal-p (buffer-file-name (current-buffer)) ellm--conversations-file))
     (error "Not in the conversations file"))
@@ -756,8 +736,7 @@ Pass an `identity' callback to return the conversation org-element."
   (org-overview)
   (ellm--goto-first-top-level-heading)
   (org-fold-show-subtree)
-  (display-buffer (current-buffer) t))
-
+  (display-buffer (current-buffer)))
 
 (defun ellm-show-conversations-buffer ()
   "Show the conversations in the `ellm--conversations-file'."
@@ -779,10 +758,6 @@ Pass an `identity' callback to return the conversation org-element."
                           ellm--debug-mode)))
     (dolist (symbol symbols-to-add)
       (cl-pushnew symbol savehist-additional-variables))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; logging functions below ;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun ellm--log (data &optional label should-encode-to-json)
   "Log `DATA' with an optional `LABEL'.
@@ -858,23 +833,27 @@ Will call `json-encode' on `DATA' if
     (ellm--log org-string
                "MESSAGES-FOR-ORG-MODE" t)))
 
+(defun ellm--log-escaped-org-messages (org-string)
+  "Log `ORG-STRING'."
+  (when ellm--debug-mode
+    (ellm--log org-string
+               "ESCAPED-MESSAGES-FOR-ORG-MODE" t)))
+
 (defun ellm--replace-conversation (conversation)
   "Replace the given `CONVERSATION' in `ellm--conversations-file'."
   (let ((id (org-element-property :ID conversation)))
     (with-current-buffer (find-file-noselect ellm--conversations-file)
       (unless (eq major-mode 'org-mode) (org-mode))
-      (org-goto-marker-or-bmk (org-id-find id t))
+      (goto-char (org-id-find id 'marker))
       (read-only-mode -1)
       (org-cut-subtree)
       (read-only-mode 1)
-      (ellm--insert-conversation conversation))))
+      (ellm--insert-conversation-into-org conversation))))
 
 (defun ellm--goto-first-top-level-heading ()
   "Go to the first top-level heading in the current buffer."
   (goto-char (point-min))
   (org-goto-first-child))
-
-
 
 (defun ellm-fold-conversations-buffer ()
   "Fold all conversations in the `ellm--conversations-file'."
@@ -999,6 +978,7 @@ MAX-TOKENS: %^{Max Tokens|%(number-to-string (symbol-value 'ellm-max-tokens))}
   :group 'ellm
   :global t
   :keymap (let ((map (make-sparse-keymap)))
+            (define-key map (kbd "C-c ; N") #'ellm-resume-conversation)
             (define-key map (kbd "C-c ; n") #'ellm-chat)
             (define-key map (kbd "C-c ; t") #'ellm-toggle-test-mode)
             (define-key map (kbd "C-c ; c") #'ellm-set-config)
