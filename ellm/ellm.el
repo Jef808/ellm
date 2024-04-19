@@ -460,12 +460,17 @@ Return the conversation-data alist."
           ((eq provider 'anthropic) ellm--anthropic-api-url)
           (t (error "ellm--get-url: Unknown provider: %s" (symbol-name provider))))))
 
-(defun ellm-chat (&optional current-conversation)
-  "Send the PROMPT through to the LLM.
+(defun ellm-chat (&optional current-conversation next-prompt)
+  "Send a request to the current provider's chat completion endpoint.
 
-If `CURRENT-CONVERSATION' is non-nil, continue that conversation."
+Unless `NEXT-PROMPT' is non-nil, the next prompt is read interactively
+from the minibuffer. When `CURRENT-CONVERSATION' is a valid conversation object,
+that conversation is continued with the next prompt and associated response."
   (interactive)
-  (let* ((prompt (read-string "Enter your prompt: "))
+  (let* ((prompt-message (if current-conversation
+                             "Enter your next prompt: "
+                           "Enter your prompt: "))
+         (prompt (or next-prompt (read-string prompt-message)))
          (conversation (or
                         (and current-conversation
                              (ellm--add-user-message prompt current-conversation))
@@ -658,19 +663,23 @@ is converted to the string
       (shell-command-on-region (point-min) (point-max) pandoc-command (current-buffer) t ellm--log-buffer-name)
       (buffer-string))))
 
-(defun ellm-resume-conversation ()
-  "Resume the conversation at point.
+(defun ellm--resume-conversation (id &optional prompt)
+  "Resume the conversation at point or prescribed by `ID'.
 
-When `ellm-save-conversations' is non-nil, the conversation at point
-will be removed from the org document and the updated conversation will
-be inserted at the top of the document."
-  (interactive)
-  (let ((conversation (ellm--parse-conversation)))
-    (setf (alist-get 'system conversation)
-          (concat ellm-system-message ellm--system-message-suffix)
-          (alist-get 'max_tokens conversation) ellm-max-tokens)
-    (ellm--set-model (alist-get 'model conversation))
-    (ellm-chat conversation)))
+Optionally, the `PROMPT' for the next user message can be passed as
+an argument. When `ellm-save-conversations' is non-nil, the conversation
+at point will be removed from the org document and the updated conversation
+will be inserted at the top of the document."
+  (if-let ((conversation-pos (org-id-find id 'marker)))
+      (save-excursion
+        (goto-char conversation-pos)
+        (let ((conversation (ellm--parse-conversation)))
+          (setf (alist-get 'system conversation) (concat ellm-system-message ellm--system-message-suffix)
+                (alist-get 'max_tokens conversation) ellm-max-tokens
+                (alist-get 'temperature conversation) ellm-temperature)
+          (ellm--set-model (alist-get 'model conversation))
+          (ellm-chat conversation prompt)))
+    (user-error "Conversation with ID %s not found" id)))
 
 (defun ellm--parse-conversation ()
   "Parse the current org subtree into a conversation object.
@@ -730,6 +739,30 @@ Note that any trailing timestamp in the conversation title is removed."
                      (s-trim (buffer-substring-no-properties (point-min) (point-max))))))
               (push `((role . ,role) (content . ,content-string)) result))))))
     (nreverse result)))
+
+(defun ellm-chat-at-point (&optional prompt)
+  "Resume the conversation at point.
+
+The current buffer must be visiting `ellm-conversations-file' and
+the point be within some conversation subtree.
+In that case, that conversation is resumed with the next user message.
+Optionally, the content of that message can be passed as the `PROMPT' argument."
+  (interactive)
+  (unless (or (and (f-equal-p (buffer-file-name (current-buffer)) ellm--conversations-file)
+                   (not (org-before-first-heading-p)))
+              (equal (buffer-name) ellm--temp-conversations-buffer-name))
+    (user-error "Point is not within a conversation"))
+  (let ((id (org-entry-get (point) "ID" t)))
+    (ellm--resume-conversation id prompt)))
+
+(defun ellm-chat-external (prompt &optional id)
+  "Entry point for making a `PROMPT' via `emacsclient'.
+
+The content of the next (or first) user message is passed
+as the `PROMPT' argument. Optionally, the `ID' of a previous
+conversation can be specified to continue that conversation."
+  (if id (ellm--resume-conversation id prompt)
+    (ellm-chat nil prompt)))
 
 (defun ellm--display-org-buffer ()
   "Prepare the conversations buffer for viewing."
@@ -838,17 +871,6 @@ Will call `json-encode' on `DATA' if
   (when ellm--debug-mode
     (ellm--log org-string
                "ESCAPED-MESSAGES-FOR-ORG-MODE" t)))
-
-(defun ellm--replace-conversation (conversation)
-  "Replace the given `CONVERSATION' in `ellm--conversations-file'."
-  (let ((id (org-element-property :ID conversation)))
-    (with-current-buffer (find-file-noselect ellm--conversations-file)
-      (unless (eq major-mode 'org-mode) (org-mode))
-      (goto-char (org-id-find id 'marker))
-      (read-only-mode -1)
-      (org-cut-subtree)
-      (read-only-mode 1)
-      (ellm--insert-conversation-into-org conversation))))
 
 (defun ellm--goto-first-top-level-heading ()
   "Go to the first top-level heading in the current buffer."
@@ -978,7 +1000,7 @@ MAX-TOKENS: %^{Max Tokens|%(number-to-string (symbol-value 'ellm-max-tokens))}
   :group 'ellm
   :global t
   :keymap (let ((map (make-sparse-keymap)))
-            (define-key map (kbd "C-c ; N") #'ellm-resume-conversation)
+            (define-key map (kbd "C-c ; N") #'ellm-chat-at-point)
             (define-key map (kbd "C-c ; n") #'ellm-chat)
             (define-key map (kbd "C-c ; t") #'ellm-toggle-test-mode)
             (define-key map (kbd "C-c ; c") #'ellm-set-config)
