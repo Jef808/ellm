@@ -26,6 +26,7 @@
 (require 'org-element)
 (require 'org-fold)
 (require 'org-id)
+(require 'ox-html)
 (require 'savehist)
 (require 'url)
 
@@ -162,6 +163,12 @@ See `ellm--make-context-message' for usage details."
   :type 'string
   :group 'ellm)
 
+(defvar ellm--external-chat-p nil
+  "If non-nil, the chat is being conducted in an external chat buffer.")
+
+(defvar ellm--last-conversation-exported-id nil
+  "The ID of the last conversation exported to an external chat buffer.")
+
 (defconst ellm--log-buffer-name "*ELLM-Logs*"
   "Log buffer for LLM messages.")
 
@@ -177,7 +184,7 @@ See `ellm--make-context-message' for usage details."
   "Set the API `PROVIDER' to use."
   (interactive)
   (let* ((p (or provider
-              (intern (completing-read "Choose provider: " '(openai anthropic)))))
+                (intern (completing-read "Choose provider: " '(openai anthropic)))))
          (models-alist (if (eq p 'openai) ellm--openai-models-alist ellm--anthropic-models-alist)))
     (setq ellm-model (alist-get ellm-model-size models-alist)
           ellm-provider p)
@@ -548,7 +555,11 @@ Information about the response is contained in `STATUS' (see `url-retrieve')."
         (when ellm-save-conversations
           (save-buffer))
         (read-only-mode 1)
-        (ellm--display-org-buffer)))))
+        (org-up-heading-safe)
+        (ellm--display-org-buffer)
+        (when ellm--external-chat-p
+          (ellm-export-conversation)
+          (setq ellm--external-chat-p nil))))))
 
 (defun ellm--insert-heading-and-metadata (title id model temperature)
   "Insert an Org heading with properties TITLE, ID, MODEL, and TEMPERATURE."
@@ -663,14 +674,19 @@ is converted to the string
       (shell-command-on-region (point-min) (point-max) pandoc-command (current-buffer) t ellm--log-buffer-name)
       (buffer-string))))
 
-(defun ellm--resume-conversation (id &optional prompt)
-  "Resume the conversation at point or prescribed by `ID'.
+(defun ellm--resume-conversation (&optional id prompt)
+  "Resume a previous conversation.
 
+When `ID' is nil, resume the latest conversation
+appearing in `ellm--conversations-file'.
 Optionally, the `PROMPT' for the next user message can be passed as
-an argument. When `ellm-save-conversations' is non-nil, the conversation
+an argument.
+When `ellm-save-conversations' is non-nil, the conversation
 at point will be removed from the org document and the updated conversation
 will be inserted at the top of the document."
-  (if-let ((conversation-pos (org-id-find id 'marker)))
+  (let ((conversation-pos
+         (or (org-id-find id 'marker)
+             (ellm--get-first-conversation-id))))
       (save-excursion
         (goto-char conversation-pos)
         (let ((conversation (ellm--parse-conversation)))
@@ -678,8 +694,7 @@ will be inserted at the top of the document."
                 (alist-get 'max_tokens conversation) ellm-max-tokens
                 (alist-get 'temperature conversation) ellm-temperature)
           (ellm--set-model (alist-get 'model conversation))
-          (ellm-chat conversation prompt)))
-    (user-error "Conversation with ID %s not found" id)))
+          (ellm-chat conversation prompt)))))
 
 (defun ellm--parse-conversation ()
   "Parse the current org subtree into a conversation object.
@@ -761,6 +776,7 @@ Optionally, the content of that message can be passed as the `PROMPT' argument."
 The content of the next (or first) user message is passed
 as the `PROMPT' argument. Optionally, the `ID' of a previous
 conversation can be specified to continue that conversation."
+  (setq ellm--external-chat-p t)
   (if id (ellm--resume-conversation id prompt)
     (ellm-chat nil prompt)))
 
@@ -780,6 +796,26 @@ conversation can be specified to continue that conversation."
         (org-mode))
       (read-only-mode 1)
       (org-overview))))
+
+(defun ellm-export-conversation ()
+  "Mark the current conversation in the `ellm--conversations-file'."
+  (interactive)
+  (save-excursion
+    (org-up-heading-safe)
+    (let ((html-file (org-html-export-to-html nil 'subtree)))
+      (browse-url html-file))))
+
+(defun ellm--get-first-conversation-id ()
+  "Get the ID of the first conversation in the `ellm--conversations-file'."
+  (with-current-buffer (find-file-noselect ellm--conversations-file)
+    (goto-char (point-min))
+    (org-goto-first-child)
+    (org-entry-get (point) "ID")))
+
+(defun ellm--goto-first-top-level-heading ()
+  "Go to the first top-level heading in the current buffer."
+  (goto-char (point-min))
+  (org-goto-first-child))
 
 (defun ellm--setup-persistance ()
   "Register ellm configuration variables with the `savehist' package."
@@ -871,11 +907,6 @@ Will call `json-encode' on `DATA' if
   (when ellm--debug-mode
     (ellm--log org-string
                "ESCAPED-MESSAGES-FOR-ORG-MODE" t)))
-
-(defun ellm--goto-first-top-level-heading ()
-  "Go to the first top-level heading in the current buffer."
-  (goto-char (point-min))
-  (org-goto-first-child))
 
 (defun ellm-fold-conversations-buffer ()
   "Fold all conversations in the `ellm--conversations-file'."
@@ -1002,6 +1033,7 @@ MAX-TOKENS: %^{Max Tokens|%(number-to-string (symbol-value 'ellm-max-tokens))}
   :keymap (let ((map (make-sparse-keymap)))
             (define-key map (kbd "C-c ; N") #'ellm-chat-at-point)
             (define-key map (kbd "C-c ; n") #'ellm-chat)
+            (define-key map (kbd "C-c ; e") #'ellm-export-conversation)
             (define-key map (kbd "C-c ; t") #'ellm-toggle-test-mode)
             (define-key map (kbd "C-c ; c") #'ellm-set-config)
             (define-key map (kbd "C-c ; ;") #'ellm-show-conversations-buffer)
