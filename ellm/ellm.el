@@ -29,6 +29,7 @@
 (require 'ox-html)
 (require 'savehist)
 (require 'url)
+(require 'know-your-http-well)
 
 (defgroup ellm nil
   "Make API calls to LLMs."
@@ -163,7 +164,7 @@ See `ellm--make-context-message' for usage details."
   :type 'string
   :group 'ellm)
 
-(defvar ellm--external-chat-p nil
+(defvar ellm-auto-export nil
   "If non-nil, the chat is being conducted in an external chat buffer.")
 
 (defvar ellm--last-conversation-exported-id nil
@@ -171,6 +172,23 @@ See `ellm--make-context-message' for usage details."
 
 (defconst ellm--log-buffer-name "*ELLM-Logs*"
   "Log buffer for LLM messages.")
+
+(defvar ellm-provider-configurations
+  `((openai . ((base-url . ,ellm--openai-api-url)
+               (get-api-key . ,(lambda () (funcall ellm-get-openai-api-key)))
+               (prepare-request-headers . ellm--prepare-request-headers-default)
+               (prepare-request-body . ellm--prepare-request-body-default)
+               (parse-response . ellm--parse-response-openai)))
+    (anthropic . ((base-url . ,ellm--anthropic-api-url)
+                  (get-api-key . ,(lambda () (funcall ellm-get-anthropic-api-key)))
+                  (prepare-request-headers . ellm--prepare-request-headers-anthropic)
+                  (prepare-request-body . ellm--prepare-request-body-anthropic)
+                  (parse-response . ellm--parse-response-anthropic))))
+  "Alist mapping providers to their API configurations.")
+
+(defun ellm--get-provider-configuration (provider)
+  "Get the configuration for the `PROVIDER'."
+  (alist-get provider ellm-provider-configurations))
 
 (defun ellm--get-openai-api-key-from-env ()
   "Get the OpenAI API key from the environment."
@@ -321,6 +339,12 @@ When togling off, restore the previously set values."
   (setq ellm--debug-mode (not ellm--debug-mode))
   (message "...debug mode %s..." (if ellm--debug-mode "enabled" "disabled")))
 
+(defun ellm-toggle-auto-export ()
+  "Toggle automatic exports of responses."
+  (interactive)
+  (setq ellm-auto-export (not ellm-auto-export))
+  (message "...debug mode %s..." (if ellm-auto-export "enabled" "disabled")))
+
 (defun ellm-toggle-save-conversations ()
   "Toggle saving conversations to `ellm--conversations-file'."
   (interactive)
@@ -401,7 +425,7 @@ for determining the language with which to format the context."
 
 (defun ellm--make-message (role content)
   "Create a message with the given `ROLE' and `CONTENT'."
-  `((role . ,role) (content . ,content)))
+  `((role . ,role) (content . ,(encode-coding-string content 'utf-8))))
 
 (defun ellm--add-system-message (content conversation)
   "Prepend a system message with `CONTENT' to the `CONVERSATION'."
@@ -433,39 +457,61 @@ Return the conversation-data alist."
       (system . ,(concat ellm-system-message ellm--system-message-suffix)))))
 
 (defun ellm--prepare-request-headers (conversation)
-  "Prepare the API call headers to send `CONVERSATION'."
+  "Prepare the API call body to send `CONVERSATION'."
   (let* ((provider (ellm--get-model-provider conversation))
-         (headers
-          (cond ((eq provider 'openai)
-                 `(("Authorization" . ,(concat "Bearer " (funcall ellm-get-openai-api-key)))))
-                ((eq provider 'anthropic)
-                 `(("x-api-key" . ,(funcall ellm-get-anthropic-api-key))
-                   ("anthropic-version" . "2023-06-01")))
-                (t (error "ellm--prepare-request-headers: Unknown provider: %s" (symbol-name provider))))))
-    (setf (alist-get "Content-Type" headers nil nil #'string=) "application/json")
-    headers))
+         (config (alist-get provider ellm-provider-configurations))
+         (api-key-fn (lambda () (funcall (alist-get 'get-api-key config))))
+         (prepare-fn (alist-get 'prepare-request-headers config)))
+    (funcall prepare-fn api-key-fn)))
 
-(defun ellm--prepare-request-body (conversation-data)
-  "Prepare the messages list with a new user message based on `CONVERSATION-DATA'."
-  (let ((data (copy-alist conversation-data))
-        (provider (ellm--get-model-provider conversation-data)))
-    (unless (eq provider 'anthropic)
-      (let* ((messages (cl-copy-list (alist-get 'messages data)))
-             (system-message (alist-get 'system data)))
-        (setf (alist-get 'messages data) messages)
-        (ellm--add-system-message system-message data)
-        (setf (alist-get 'system data nil t) nil)))
+(defun ellm--prepare-request-headers-default (get-api-key)
+  "Prepare the headers for API requests as done for openai models.
+
+The `GET-API-KEY' function is used to retrieve the api key for the provider."
+  `(("Authorization" . ,(concat "Bearer " (funcall get-api-key)))
+    ("Content-Type" . "application/json; charset=utf-8")))
+
+(defun ellm--prepare-request-headers-anthropic (get-api-key)
+  "Prepare the headers for API requests made to anthropic models.
+
+The `GET-API-KEY' function is used to retrieve the api key for anthropic."
+  `(("x-api-key" . ,(funcall get-api-key))
+    ("anthropic-version" . "2023-06-01")
+    ("Content-Type" . "application/json; charset=utf-8")))
+
+(defun ellm--prepare-request-body-default (conversation)
+  "Prepare the messages list with a new user message based on `CONVERSATION'."
+  (let ((data (copy-alist conversation)))
+    (let* ((messages (cl-copy-list (alist-get 'messages data)))
+           (system-message (alist-get 'system data)))
+      (setf (alist-get 'messages data) messages)
+      (ellm--add-system-message system-message data)
+      (setf (alist-get 'system data nil t) nil))
     (setf (alist-get 'title data nil t) nil)
     (setf (alist-get 'id data nil t) nil)
     (json-encode data)))
 
+(defun ellm--prepare-request-body-anthropic (conversation)
+  "Prepare the API call body to send `CONVERSATION'."
+  (let ((data (copy-alist conversation)))
+    (setf (alist-get 'title data nil t) nil)
+    (setf (alist-get 'id data nil t) nil)
+    (json-encode data)))
+
+(defun ellm--prepare-request-body (conversation)
+  "Prepare the API call body to send `CONVERSATION'."
+  (let* ((provider (ellm--get-model-provider conversation))
+         (config (alist-get provider ellm-provider-configurations))
+         (prepare-fn (alist-get 'prepare-request-body config)))
+    (funcall prepare-fn conversation)))
+
 (defun ellm--get-url (conversation)
   "Get the URL to send the request to based on `CONVERSATION'."
-  (let ((provider (ellm--get-model-provider conversation)))
-    (message "Provider is %s" provider)
-    (cond ((eq provider 'openai) ellm--openai-api-url)
-          ((eq provider 'anthropic) ellm--anthropic-api-url)
-          (t (error "ellm--get-url: Unknown provider: %s" (symbol-name provider))))))
+  (let* ((provider (ellm--get-model-provider conversation))
+         (config (alist-get provider ellm-provider-configurations)))
+    (or (alist-get 'base-url config)
+        (error "ellm--get-url: Unknown provider or missing base url: %s"
+               (symbol-name provider)))))
 
 (defun ellm-chat (&optional current-conversation next-prompt)
   "Send a request to the current provider's chat completion endpoint.
@@ -557,9 +603,8 @@ Information about the response is contained in `STATUS' (see `url-retrieve')."
         (read-only-mode 1)
         (org-up-heading-safe)
         (ellm--display-org-buffer)
-        (when ellm--external-chat-p
-          (ellm-export-conversation)
-          (setq ellm--external-chat-p nil))))))
+        (when ellm-auto-export
+          (ellm-export-conversation))))))
 
 (defun ellm--insert-heading-and-metadata (title id model temperature)
   "Insert an Org heading with properties TITLE, ID, MODEL, and TEMPERATURE."
@@ -776,7 +821,7 @@ Optionally, the content of that message can be passed as the `PROMPT' argument."
 The content of the next (or first) user message is passed
 as the `PROMPT' argument. Optionally, the `ID' of a previous
 conversation can be specified to continue that conversation."
-  (setq ellm--external-chat-p t)
+  (setq ellm--auto-export t)
   (if id (ellm--resume-conversation id prompt)
     (ellm-chat nil prompt)))
 
@@ -860,7 +905,8 @@ Will call `json-encode' on `DATA' if
 
 (defun ellm--log-http-error (status)
   "Log HTTP `STATUS' errors."
-  (ellm--log (plist-get status :error) "HTTP-ERROR") t)
+  (let ((err (plist-get status :error)))
+    (ellm--log (http-status-code (number-to-string (car (last err)))) "HTTP-ERROR" t)))
 
 (defun ellm--log-http-redirect (status)
   "Log HTTP `STATUS' redirects."
