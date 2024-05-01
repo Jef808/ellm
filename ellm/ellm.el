@@ -609,6 +609,9 @@ Information about the response is contained in `STATUS' (see `url-retrieve')."
 (defun ellm--insert-conversation-into-org (conversation)
   "Insert the `CONVERSATION' into the org file."
   (let* ((messages (alist-get 'messages conversation))
+         (number-previous-messages (- (length messages) 2))
+         (previous-messages (take number-previous-messages messages))
+         (new-messages (nthcdr number-previous-messages messages))
          (title (alist-get 'title conversation))
          (model (alist-get 'model conversation))
          (temperature (alist-get 'temperature conversation))
@@ -616,8 +619,10 @@ Information about the response is contained in `STATUS' (see `url-retrieve')."
          (buffer (if ellm-save-conversations
                      (find-file-noselect ellm--conversations-file)
                    (get-buffer-create ellm--temp-conversations-buffer-name)))
-         (org-formatted-messages (ellm--convert-messages-to-org messages)))
-    (ellm--log-org-messages org-formatted-messages)
+         (stringified-previous-messages (ellm--messages-to-string previous-messages "**"))
+         (org-formatted-new-messages (ellm--convert-messages-to-org new-messages))
+         (messages-to-insert (concat stringified-previous-messages "\n\n" org-formatted-new-messages)))
+    (ellm--log-org-messages messages-to-insert)
     (with-current-buffer buffer
       (org-mode)
       (read-only-mode -1)
@@ -628,7 +633,7 @@ Information about the response is contained in `STATUS' (see `url-retrieve')."
           (setq id (or id (org-id-new))))
         (goto-char (point-min))
         (ellm--insert-heading-and-metadata title id model temperature)
-        (insert org-formatted-messages)
+        (insert messages-to-insert)
         (when ellm-save-conversations
           (save-buffer))
         (read-only-mode 1)
@@ -715,17 +720,19 @@ Note that both components are trimmed of whitespace."
 
 (defun ellm--convert-messages-to-org (messages)
   "Convert `MESSAGES' to an Org-formatted string using Pandoc."
-  (let ((markdown-string (ellm--messages-to-markdown-string messages)))
+  (let ((markdown-string (ellm--messages-to-string messages)))
     (ellm--log-markdown-messages markdown-string)
     (let ((org-string (ellm--markdown-to-org-sync markdown-string)))
       (ellm--log-org-messages org-string)
       org-string)))
 
-(defun ellm--messages-to-markdown-string (messages)
-  "Convert the MESSAGES to a markdown string."
-  (mapconcat #'ellm--stringify-message messages "\n\n"))
+(defun ellm--messages-to-string (messages &optional headline-char)
+  "Convert the MESSAGES to a markdown string.
 
-(defun ellm--stringify-message (message)
+Use `HEADLINE-CHAR' as the character for headlines."
+  (mapconcat (lambda (message) (ellm--stringify-message message headline-char)) messages "\n\n"))
+
+(defun ellm--stringify-message (message &optional headline-char)
   "Convert the `MESSAGE' to a string.
 
 A message of the form
@@ -734,12 +741,15 @@ A message of the form
 
 is converted to the string
 
-  \"# Role
-     content\"."
+  \"[HC] Role
+     content\"
+
+where [HC] is `HEADLINE-CHAR' or \"#\" by default."
   (let ((role
          (capitalize (substring (symbol-name (alist-get 'role message)) 1)))
-        (content (alist-get 'content message)))
-    (format "# %s\n\n%s" role content)))
+        (content (alist-get 'content message))
+        (hc (or headline-char "#")))
+    (format "%s %s\n\n%s" hc role content)))
 
 (defun ellm--markdown-to-org-sync (markdown-string)
   "Convert `MARKDOWN-STRING' from Markdown to Org using Pandoc."
@@ -798,10 +808,7 @@ Note that any trailing timestamp in the conversation title is removed."
   (when (org-before-first-heading-p)
     (error "Point is not within a conversation"))
   (save-excursion
-    (org-up-heading-safe)
-    (unless (and (looking-at org-heading-regexp)
-                 (= (org-element-property :level (org-element-at-point)) 1))
-      (error "Failed to find top-level heading"))
+    (ellm--goto-conversation-top)
     (org-narrow-to-subtree)
     (let ((conversation
            (unwind-protect (car (org-element-contents (org-element-parse-buffer))))))
@@ -880,9 +887,7 @@ conversation can be specified to continue that conversation."
   "Mark the current conversation in the `ellm--conversations-file'."
   (interactive)
   (save-excursion
-    (org-up-heading-safe)
-    (while (not (= (org-element-property :level (org-element-at-point)) 1))
-      (org-up-heading-safe))
+    (ellm--goto-conversation-top)
     (let ((html-file (org-html-export-to-html nil 'subtree)))
       (browse-url html-file))))
 
@@ -892,6 +897,12 @@ conversation can be specified to continue that conversation."
     (goto-char (point-min))
     (org-goto-first-child)
     (org-entry-get (point) "ID")))
+
+(defun ellm--goto-conversation-top ()
+  "Go to the top of the current conversation in the `ellm--conversations-file'."
+  (org-up-heading-safe)
+  (while (not (= (or (org-element-property :level (org-element-at-point)) -1) 1))
+    (org-up-heading-safe)))
 
 (defun ellm--goto-first-top-level-heading ()
   "Go to the first top-level heading in the current buffer."
