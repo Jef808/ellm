@@ -48,11 +48,20 @@
   :type 'function
   :group 'ellm)
 
+(defcustom ellm-get-groq-api-key
+  #'ellm--get-groq-api-key-from-env
+  "A function which retrieves your Groq API key."
+  :type 'function
+  :group 'ellm)
+
 (defconst ellm--openai-api-url "https://api.openai.com/v1/chat/completions"
   "The URL to send requests to the OpenAI API.")
 
 (defconst ellm--anthropic-api-url "https://api.anthropic.com/v1/messages"
   "The URL to send requests to the OpenAI API.")
+
+(defconst ellm--groq-api-url "https://api.groq.com/openai/v1/chat/completions"
+  "The URL to send requests to the Groq API.")
 
 (defcustom ellm--temp-conversations-buffer-name "*LLM Conversations*"
   "The file to store conversation history."
@@ -68,7 +77,8 @@
   "The provider to use for API calls."
   :type '(choice
           (const :tag "OpenAI" openai)
-          (const :tag "Anthropic" anthropic))
+          (const :tag "Anthropic" anthropic)
+          (const :tag "Groq" groq))
   :group 'ellm)
 
 (defcustom ellm-model-size 'big
@@ -108,11 +118,22 @@
   :type 'alist
   :group 'ellm)
 
+
+(defcustom ellm--groq-models-alist `((big . "llama-70b-8192")
+                                     (medium . "llama-8b-8192")
+                                     (small . "mixtral-8x7b-32768"))
+  "Alist mapping model sizes to OpenAI model names."
+  :type 'alist
+  :group 'ellm)
+
 (defcustom ellm-model-alist `(("gpt-4-turbo-preview" . (:provider openai :size big))
                               ("gpt-3.5-turbo" . (:provider openai :size small))
                               ("claude-3-opus-20240229" . (:provider anthropic :size big))
                               ("claude-3-sonnet-20240229" . (:provider anthropic :size medium))
-                              ("claude-3-haiku-20240307" . (:provider anthropic :size small)))
+                              ("claude-3-haiku-20240307" . (:provider anthropic :size small))
+                              ("llama-70b-8192" . (:provider groq :size big))
+                              ("llama-8b-8292" . (:provider groq :size medium))
+                              ("mixtral-8x7b-32768" . (:provider groq :size small)))
   "Alist mapping model names to their providers."
   :type 'alist
   :group 'ellm)
@@ -185,7 +206,13 @@ See `ellm--make-context-message' for usage details."
                   (prepare-request-headers . ellm--prepare-request-headers-anthropic)
                   (prepare-request-body . ellm--prepare-request-body-anthropic)
                   (parse-response . ellm--parse-response-anthropic)
-                  (models-alist . ,ellm--anthropic-models-alist))))
+                  (models-alist . ,ellm--anthropic-models-alist)))
+    (groq . ((base-url . ,ellm--groq-api-url)
+             (get-api-key . ,(lambda () (funcall ellm-get-groq-api-key)))
+             (prepare-request-headers . ellm--prepare-request-headers-default)
+             (prepare-request-body . ellm--prepare-request-body-default)
+             (parse-response . ellm--parse-response-openai)
+             (models-alist . ,ellm--groq-models-alist))))
   "Alist mapping providers to their API configurations.")
 
 (defun ellm--get-provider-configuration (provider)
@@ -200,11 +227,15 @@ See `ellm--make-context-message' for usage details."
   "Get the Anthropic API key from the environment."
   (getenv "ANTHROPIC_API_KEY"))
 
+(defun ellm--get-groq-api-key-from-env ()
+  "Get the Groq API key from the environment."
+  (getenv "GROQ_API_KEY"))
+
 (defun ellm-set-provider (&optional provider)
   "Set the API `PROVIDER' to use."
   (interactive)
   (let* ((p (or provider
-                (intern (completing-read "Choose provider: " '(openai anthropic)))))
+                (intern (completing-read "Choose provider: " '(anthropic openai groq)))))
          (config (ellm--get-provider-configuration p))
          (models-alist (alist-get 'models-alist config)))
     (setq ellm-model (alist-get ellm-model-size models-alist)
@@ -559,12 +590,9 @@ Information about the response is contained in `STATUS' (see `url-retrieve')."
 (defun ellm--add-response-to-conversation (parsed-response conversation)
   "Process the `PARSED-RESPONSE' from the API call made with config `CONVERSATION'."
   (let* ((provider (ellm--get-model-provider conversation))
-         (response-content (cond ((eq provider 'openai)
-                                  (ellm--extract-response-content-openai parsed-response))
-                                 ((eq provider 'anthropic)
-                                  (ellm--extract-response-content-anthropic parsed-response))
-                                 (t (error "ellm--add-response-to-conversation: Unknown provider: %s"
-                                           (symbol-name provider))))))
+         (config (ellm--get-provider-configuration provider))
+         (parse-response (alist-get 'parse-response config))
+         (response-content (funcall parse-response parsed-response)))
     (ellm--handle-assistant-response response-content conversation)
     (ellm--log-conversation conversation)
     (ellm--insert-conversation-into-org conversation)))
@@ -629,7 +657,7 @@ Information about the response is contained in `STATUS' (see `url-retrieve')."
      (ellm--log-json-error error)
      nil)))
 
-(defun ellm--extract-response-content-openai (response)
+(defun ellm--parse-response-openai (response)
   "Extract the text from the json `RESPONSE'.
 This function is meant to be used with the response from the OpenAI API."
   (condition-case error
@@ -641,7 +669,7 @@ This function is meant to be used with the response from the OpenAI API."
         (replace-regexp-in-string "\\\\\"" "\"" content))
     (wrong-type-argument (ellm--log-response-error error))))
 
-(defun ellm--extract-response-content-anthropic (response)
+(defun ellm--parse-response-anthropic (response)
   "Extract the text from the json `RESPONSE'."
   (condition-case error
       (let* ((messages (gethash "content" response))
