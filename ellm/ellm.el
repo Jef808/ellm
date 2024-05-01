@@ -762,7 +762,7 @@ at point will be removed from the org document and the updated conversation
 will be inserted at the top of the document."
   (let ((conversation-pos
          (or (org-id-find id 'marker)
-             (user-error "Conversation with id %s not found" id))))
+             (error "Conversation with id %s not found" id))))
       (save-excursion
         (goto-char conversation-pos)
         (let ((conversation (ellm--parse-conversation)))
@@ -778,7 +778,8 @@ will be inserted at the top of the document."
 Note that any trailing timestamp in the conversation title is removed."
   (let* (result
          (subtree (ellm--conversation-at-point))
-         (title (org-element-property :raw-value (car (org-element-contents subtree))))
+         (title (org-element-property :raw-value subtree))
+         (msg (message "***TITLE: %s" title))
          (effective-title (when (string-match org-element--timestamp-regexp title)
                             (s-trim (substring title 0 (match-beginning 0)))))
          (metadata (ellm--metadata-from-subtree subtree))
@@ -803,33 +804,35 @@ Note that any trailing timestamp in the conversation title is removed."
       (error "Failed to find top-level heading"))
     (org-narrow-to-subtree)
     (let ((conversation
-           (unwind-protect (org-element-parse-buffer))))
+           (unwind-protect (car (org-element-contents (org-element-parse-buffer))))))
       (widen)
       conversation)))
 
 (defun ellm--metadata-from-subtree (subtree)
   "Extract metadata from an org `SUBTREE' conversation."
-  (let* ((headline (car (org-element-contents subtree)))
-         (id (org-element-property :ID headline))
-         (model (org-element-property :MODEL headline))
-         (temperature (string-to-number (org-element-property :TEMPERATURE headline))))
+  (let ((id (org-element-property :ID subtree))
+        (model (org-element-property :MODEL subtree))
+        (temperature (string-to-number (org-element-property :TEMPERATURE subtree))))
     `((id . ,id) (model . ,model) (temperature . ,temperature))))
 
 (defun ellm--messages-from-subtree (subtree)
   "Extract messages from an org `SUBTREE' conversation."
   (let (result)
-    (org-element-map subtree 'section
-      (lambda (section)
-        (let* ((title (org-entry-get section "ITEM"))
-               (content (org-element-contents section)))
+    (org-element-map subtree 'headline
+      (lambda (hl)
+        (let* ((title (org-element-property :raw-value hl))
+               (content (org-element-contents (car (org-element-contents hl)))))
           (when (and (member title '("User" "Assistant")) content)
             (let ((role (intern (concat ":" (downcase title))))
-                  (content-string
-                   (with-temp-buffer
-                     (insert (org-element-interpret-data (cdr content)))
-                     (s-trim (buffer-substring-no-properties (point-min) (point-max))))))
+                  (content-string (ellm--org-plain-text (cdr content))))
               (push `((role . ,role) (content . ,content-string)) result))))))
     (nreverse result)))
+
+(defun ellm--org-plain-text (org-element)
+  "Get the plain text content of the given `ORG-ELEMENT'."
+  (with-temp-buffer
+    (insert (org-element-interpret-data org-element))
+    (s-trim (buffer-substring-no-properties (point-min) (point-max)))))
 
 (defun ellm-chat-at-point (&optional prompt)
   "Resume the conversation at point.
