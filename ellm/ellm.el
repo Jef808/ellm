@@ -881,6 +881,8 @@ conversation can be specified to continue that conversation."
   (interactive)
   (save-excursion
     (org-up-heading-safe)
+    (while (not (= (org-element-property :level (org-element-at-point)) 1))
+      (org-up-heading-safe))
     (let ((html-file (org-html-export-to-html nil 'subtree)))
       (browse-url html-file))))
 
