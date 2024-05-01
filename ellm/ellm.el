@@ -178,12 +178,14 @@ See `ellm--make-context-message' for usage details."
                (get-api-key . ,(lambda () (funcall ellm-get-openai-api-key)))
                (prepare-request-headers . ellm--prepare-request-headers-default)
                (prepare-request-body . ellm--prepare-request-body-default)
-               (parse-response . ellm--parse-response-openai)))
+               (parse-response . ellm--parse-response-openai)
+               (models-alist . ,ellm--openai-models-alist)))
     (anthropic . ((base-url . ,ellm--anthropic-api-url)
                   (get-api-key . ,(lambda () (funcall ellm-get-anthropic-api-key)))
                   (prepare-request-headers . ellm--prepare-request-headers-anthropic)
                   (prepare-request-body . ellm--prepare-request-body-anthropic)
-                  (parse-response . ellm--parse-response-anthropic))))
+                  (parse-response . ellm--parse-response-anthropic)
+                  (models-alist . ,ellm--anthropic-models-alist))))
   "Alist mapping providers to their API configurations.")
 
 (defun ellm--get-provider-configuration (provider)
@@ -203,22 +205,22 @@ See `ellm--make-context-message' for usage details."
   (interactive)
   (let* ((p (or provider
                 (intern (completing-read "Choose provider: " '(openai anthropic)))))
-         (models-alist (if (eq p 'openai) ellm--openai-models-alist ellm--anthropic-models-alist)))
+         (config (ellm--get-provider-configuration p))
+         (models-alist (alist-get 'models-alist config)))
     (setq ellm-model (alist-get ellm-model-size models-alist)
-          ellm-provider p)
-    (message "...provider set to %s..." ellm-provider)))
+          ellm-provider p))
+  (message "...provider set to %s, model set to %s..." ellm-provider ellm-model))
 
 (defun ellm-set-model-size (&optional model-size)
-    "Set the `MODEL-SIZE' to use."
-    (interactive)
-    (setq ellm-model-size
-          (or model-size
-            (intern (completing-read "Choose model size: " '(big medium small)))))
-    (let ((models-alist (if (eq ellm-provider 'openai)
-                            ellm--openai-models-alist
-                          ellm--anthropic-models-alist)))
-      (setq ellm-model (cdr (assoc ellm-model-size models-alist)))
-      (message "...model set to %s..." ellm-model)))
+  "Set the `MODEL-SIZE' to use."
+  (interactive)
+  (let* ((ms (or model-size
+                 (intern (completing-read "Choose model size: " '(big medium small)))))
+         (config (ellm--get-provider-configuration ellm-provider))
+         (models-alist (alist-get 'models-alist config)))
+    (setq ellm-model (alist-get ms models-alist)
+          ellm-model-size ms))
+  (message "...model-size set to %s, model set to %s..." ellm-model-size ellm-model))
 
 (defun ellm--validation-max-tokens (max-tokens)
   "Validate the `MAX-TOKENS' value."
