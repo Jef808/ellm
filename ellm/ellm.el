@@ -841,6 +841,13 @@ Note that any trailing timestamp in the conversation title is removed."
     (insert (org-element-interpret-data org-element))
     (s-trim (buffer-substring-no-properties (point-min) (point-max)))))
 
+(defun ellm--error-if-not-conversation-buffer ()
+  "Raise an error if the current buffer is not the conversations buffer."
+  (unless (or (and (f-equal-p (buffer-file-name (current-buffer)) ellm--conversations-file)
+                   (not (org-before-first-heading-p)))
+              (equal (buffer-name) ellm--temp-conversations-buffer-name))
+    (user-error "Point is not within a conversation")))
+
 (defun ellm-chat-at-point (&optional prompt)
   "Resume the conversation at point.
 
@@ -849,10 +856,7 @@ the point be within some conversation subtree.
 In that case, that conversation is resumed with the next user message.
 Optionally, the content of that message can be passed as the `PROMPT' argument."
   (interactive)
-  (unless (or (and (f-equal-p (buffer-file-name (current-buffer)) ellm--conversations-file)
-                   (not (org-before-first-heading-p)))
-              (equal (buffer-name) ellm--temp-conversations-buffer-name))
-    (user-error "Point is not within a conversation"))
+  (ellm--error-if-not-conversation-buffer)
   (let ((id (org-entry-get (point) "ID" t)))
     (ellm--resume-conversation id prompt)))
 
@@ -881,7 +885,8 @@ conversation can be specified to continue that conversation."
       (unless (eq major-mode 'org-mode)
         (org-mode))
       (read-only-mode 1)
-      (org-overview))))
+      (org-overview)
+      (ellm--org-apply-rating-face))))
 
 (defun ellm-export-conversation ()
   "Mark the current conversation in the `ellm--conversations-file'."
@@ -1000,6 +1005,53 @@ Will call `json-encode' on `DATA' if
   (when ellm--debug-mode
     (ellm--log org-string
                "ESCAPED-MESSAGES-FOR-ORG-MODE" t)))
+
+(defun ellm--org-rate-response (rating)
+  "Rate the current org headline with a RATING."
+  (interactive "sRate the conversation (1-5): ")
+  (ellm--error-if-not-conversation-buffer)
+  (let ((valid-ratings '("1" "2" "3" "4" "5")))
+    (if (member rating valid-ratings)
+        (save-excursion
+          (ellm--goto-conversation-top)
+          (org-set-property "RATING" rating)
+          (save-buffer))
+      (error "Invalid rating. Please enter a value between 1 and 5"))))
+
+(defun ellm--org-apply-rating-face ()
+  "Apply custom face to org headlines based on their RATING property."
+  (save-excursion
+    (goto-char (point-min))
+    (while (re-search-forward "^\\* " nil t)
+      (let ((rating (org-entry-get (point) "RATING")))
+        (when rating
+          (let ((face (pcase (string-to-number rating)
+                        (5 '(:foreground "gold"))
+                        (4 '(:foreground "green"))
+                        (3 '(:foreground "yellow"))
+                        (2 '(:foreground "orange"))
+                        (1 '(:foreground "red"))
+                        (_ nil))))
+            (when face
+              (let ((title-begin (line-beginning-position))
+                    (title-end (re-search-forward "  " nil t)))
+                (remove-overlays title-begin title-end 'ellm-rating t)
+                (let ((ov (make-overlay title-begin title-end)))
+                  (overlay-put ov 'ellm-rating t)
+                  (overlay-put ov 'face face))))))))))
+
+(defun ellm-org-rate-response-and-refresh (rating)
+  "Rate the current org headline with a RATING and apply the corresponding face."
+  (interactive "sRate the conversation (1-5): ")
+  (ellm--org-rate-response rating)
+  (org-redisplay-inline-images)
+  (save-restriction
+    (unwind-protect
+        (progn
+          (ellm--goto-conversation-top)
+          (org-narrow-to-element)
+          (ellm--org-apply-rating-face))
+      (widen))))
 
 (defun ellm-fold-conversations-buffer ()
   "Fold all conversations in the `ellm--conversations-file'."
@@ -1127,6 +1179,7 @@ MAX-TOKENS: %^{Max Tokens|%(number-to-string (symbol-value 'ellm-max-tokens))}
             (define-key map (kbd "C-c ; N") #'ellm-chat-at-point)
             (define-key map (kbd "C-c ; n") #'ellm-chat)
             (define-key map (kbd "C-c ; e") #'ellm-export-conversation)
+            (define-key map (kbd "C-c ; r") #'ellm-org-rate-response-and-refresh)
             (define-key map (kbd "C-c ; t") #'ellm-toggle-test-mode)
             (define-key map (kbd "C-c ; c") #'ellm-set-config)
             (define-key map (kbd "C-c ; ;") #'ellm-show-conversations-buffer)
