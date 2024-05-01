@@ -119,8 +119,8 @@
   :group 'ellm)
 
 
-(defcustom ellm--groq-models-alist `((big . "llama-70b-8192")
-                                     (medium . "llama-8b-8192")
+(defcustom ellm--groq-models-alist `((big . "llama3-70b-8192")
+                                     (medium . "llama3-8b-8192")
                                      (small . "mixtral-8x7b-32768"))
   "Alist mapping model sizes to OpenAI model names."
   :type 'alist
@@ -131,8 +131,8 @@
                               ("claude-3-opus-20240229" . (:provider anthropic :size big))
                               ("claude-3-sonnet-20240229" . (:provider anthropic :size medium))
                               ("claude-3-haiku-20240307" . (:provider anthropic :size small))
-                              ("llama-70b-8192" . (:provider groq :size big))
-                              ("llama-8b-8292" . (:provider groq :size medium))
+                              ("llama3-70b-8192" . (:provider groq :size big))
+                              ("llama3-8b-8292" . (:provider groq :size medium))
                               ("mixtral-8x7b-32768" . (:provider groq :size small)))
   "Alist mapping model names to their providers."
   :type 'alist
@@ -569,7 +569,8 @@ that conversation is continued with the next prompt and associated response."
          (url-request-data request-body))
       (ellm--log-request-headers request-headers)
       (ellm--log-request-body request-body)
-      (url-retrieve url #'ellm--handle-response (list conversation))))
+      (url-retrieve url #'ellm--handle-response (list conversation)))
+  nil)
 
 (defun ellm--handle-response (status conversation-data)
   "Handle the response to the prompt made using `CONVERSATION-DATA'.
@@ -682,7 +683,7 @@ This function is meant to be used with the response from the OpenAI API."
 (defun ellm--add-or-update-title (title conversation)
   "Add or update the `TITLE' in the `CONVERSATION'.
 
-A generic `Untitled <TIMESTAMP>' title is used if `TITLE' is nil."
+A generic `Untitled [TIMESTAMP]' title is used if `TITLE' is nil."
   (let* ((previous-title (alist-get 'title conversation))
          (new-title (or title previous-title)))
     (setf (alist-get 'title conversation)
@@ -749,7 +750,7 @@ is converted to the string
       (shell-command-on-region (point-min) (point-max) pandoc-command (current-buffer) t ellm--log-buffer-name)
       (buffer-string))))
 
-(defun ellm--resume-conversation (&optional id prompt)
+(defun ellm--resume-conversation (id &optional prompt)
   "Resume a previous conversation.
 
 When `ID' is nil, resume the latest conversation
@@ -761,7 +762,7 @@ at point will be removed from the org document and the updated conversation
 will be inserted at the top of the document."
   (let ((conversation-pos
          (or (org-id-find id 'marker)
-             (ellm--get-first-conversation-id))))
+             (user-error "Conversation with id %s not found" id))))
       (save-excursion
         (goto-char conversation-pos)
         (let ((conversation (ellm--parse-conversation)))
@@ -779,7 +780,7 @@ Note that any trailing timestamp in the conversation title is removed."
          (subtree (ellm--conversation-at-point))
          (title (org-element-property :raw-value (car (org-element-contents subtree))))
          (effective-title (when (string-match org-element--timestamp-regexp title)
-                            (substring title 0 (match-beginning 0))))
+                            (s-trim (substring title 0 (match-beginning 0)))))
          (metadata (ellm--metadata-from-subtree subtree))
          (messages (ellm--messages-from-subtree subtree)))
       (setq result metadata)
@@ -809,9 +810,9 @@ Note that any trailing timestamp in the conversation title is removed."
 (defun ellm--metadata-from-subtree (subtree)
   "Extract metadata from an org `SUBTREE' conversation."
   (let* ((headline (car (org-element-contents subtree)))
-         (id (org-entry-get headline "id"))
-         (model (org-entry-get headline "MODEL"))
-         (temperature (string-to-number (org-entry-get headline "TEMPERATURE"))))
+         (id (org-element-property :ID headline))
+         (model (org-element-property :MODEL headline))
+         (temperature (string-to-number (org-element-property :TEMPERATURE headline))))
     `((id . ,id) (model . ,model) (temperature . ,temperature))))
 
 (defun ellm--messages-from-subtree (subtree)
@@ -851,7 +852,7 @@ Optionally, the content of that message can be passed as the `PROMPT' argument."
 The content of the next (or first) user message is passed
 as the `PROMPT' argument. Optionally, the `ID' of a previous
 conversation can be specified to continue that conversation."
-  (setq ellm--auto-export t)
+  (setq ellm-auto-export t)
   (if id (ellm--resume-conversation id prompt)
     (ellm-chat nil prompt)))
 
