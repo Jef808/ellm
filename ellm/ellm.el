@@ -68,7 +68,13 @@
   :type 'string
   :group 'ellm)
 
-(defcustom ellm--conversations-file "~/.llm/conversations.org"
+(defcustom ellm--conversations-dir
+  (directory-file-name (expand-file-name ".ellm" "~/"))
+  "The directory to store conversation history."
+  :type 'string
+  :group 'ellm)
+
+(defcustom ellm--conversations-filename-prefix "conversations-"
   "The file to store conversation history."
   :type 'string
   :group 'ellm)
@@ -445,16 +451,19 @@ for determining the language with which to format the context."
          (when (use-region-p)
            (format ellm-prompt-context-fmt-string
                    (or (cdr (assoc major-mode ellm--major-mode-to-org-lang-alist)) "text")
-                   (buffer-substring-no-properties (region-beginning) (region-end)))))
-        (deactivate-mark))
+                   (buffer-substring-no-properties (region-beginning) (region-end))))))
+        (deactivate-mark)
     (concat prefix prompt)))
 
 (defun ellm--context-prefix-from-region ()
   "Return the context prefix from the active region for user prompt."
   (when (use-region-p)
-    (format ellm-prompt-context-fmt-string
-            (or (cdr (assoc major-mode ellm--major-mode-to-org-lang-alist)) "text")
-            (buffer-substring-no-properties (region-beginning) (region-end)))))
+    (let ((prefix
+           (format ellm-prompt-context-fmt-string
+                   (or (cdr (assoc major-mode ellm--major-mode-to-org-lang-alist)) "text")
+                   (buffer-substring-no-properties (region-beginning) (region-end)))))
+      (deactivate-mark)
+      prefix)))
 
 (defun ellm--make-message (role content)
   "Create a message with the given `ROLE' and `CONTENT'."
@@ -546,6 +555,17 @@ The `GET-API-KEY' function is used to retrieve the api key for anthropic."
         (error "ellm--get-url: Unknown provider or missing base url: %s"
                (symbol-name provider)))))
 
+(require 'projectile)
+
+(defun ellm--get-conversation-filename ()
+  "Get the filename for the conversation."
+  (let ((filename-suffix
+         (if (and (use-region-p) (projectile-project-p))
+             (concat (f-filename (projectile-project-root)) ".org")
+           "general.org")))
+    (f-join ellm--conversations-dir (concat ellm--conversations-filename-prefix
+                                            filename-suffix))))
+
 (defun ellm-chat (&optional current-conversation next-prompt)
   "Send a request to the current provider's chat completion endpoint.
 
@@ -606,6 +626,8 @@ Information about the response is contained in `STATUS' (see `url-retrieve')."
     (ellm--add-or-update-title title conversation)
     (ellm--add-assistant-message content conversation)))
 
+(require 'popup)
+
 (defun ellm--insert-conversation-into-org (conversation)
   "Insert the `CONVERSATION' into the org file."
   (let* ((messages (alist-get 'messages conversation))
@@ -621,10 +643,16 @@ Information about the response is contained in `STATUS' (see `url-retrieve')."
                    (get-buffer-create ellm--temp-conversations-buffer-name)))
          (stringified-previous-messages (ellm--messages-to-string previous-messages "**"))
          (org-formatted-new-messages (ellm--convert-messages-to-org new-messages))
-         (messages-to-insert (concat stringified-previous-messages "\n\n" org-formatted-new-messages)))
+         (messages-to-insert (if stringified-previous-messages
+                                 (concat stringified-previous-messages
+                                         "\n\n"
+                                         org-formatted-new-messages)
+                               org-formatted-new-messages)))
     (ellm--log-org-messages messages-to-insert)
     (with-current-buffer buffer
       (org-mode)
+      (when (not ellm-save-conversations)
+        (local-set-key (kbd "q") #'+popup/close))
       (read-only-mode -1)
       (save-excursion
         (if-let ((pos (and ellm-save-conversations (org-id-find id 'marker))))
@@ -638,7 +666,7 @@ Information about the response is contained in `STATUS' (see `url-retrieve')."
           (save-buffer))
         (read-only-mode 1)
         (org-up-heading-safe)
-        (ellm--display-org-buffer)
+        (ellm--display-conversations-buffer)
         (when ellm-auto-export
           (ellm-export-conversation))))))
 
@@ -753,12 +781,13 @@ where [HC] is `HEADLINE-CHAR' or \"#\" by default."
 
 (defun ellm--markdown-to-org-sync (markdown-string)
   "Convert `MARKDOWN-STRING' from Markdown to Org using Pandoc."
-  (let ((pandoc-command "pandoc -f markdown -t org --shift-heading-level-by=1"))
-    (with-temp-buffer
-      (org-mode)
-      (insert markdown-string)
-      (shell-command-on-region (point-min) (point-max) pandoc-command (current-buffer) t ellm--log-buffer-name)
-      (buffer-string))))
+  (let* ((pandoc-command "pandoc -f markdown -t org --shift-heading-level-by=1")
+         (org-string
+          (with-temp-buffer
+            (insert markdown-string)
+            (shell-command-on-region (point-min) (point-max) pandoc-command (current-buffer) t ellm--log-buffer-name)
+            (buffer-string))))
+    org-string))
 
 (defun ellm--resume-conversation (id &optional prompt)
   "Resume a previous conversation.
@@ -870,7 +899,7 @@ conversation can be specified to continue that conversation."
   (if id (ellm--resume-conversation id prompt)
     (ellm-chat nil prompt)))
 
-(defun ellm--display-org-buffer ()
+(defun ellm--display-conversations-buffer ()
   "Prepare the conversations buffer for viewing."
   (org-overview)
   (ellm--goto-first-top-level-heading)
@@ -1061,6 +1090,18 @@ Will call `json-encode' on `DATA' if
     (org-overview)
     (ellm--goto-first-top-level-heading)))
 
+(defun ellm--extract-symbol-definition-at-point (&optional variablep)
+  "Extract the definition of the symbol at point.
+
+If `VARIABLEP' is non-nil, treat the symbol as a variable."
+  (let* ((symbol (symbol-at-point))
+         (documentation-fn (lambda (s)
+                             (if variablep
+                                 (documentation-property s 'variable-documentation 'raw)
+                               (documentation s 'raw))))
+         (doc (funcall documentation-fn (symbol-at-point))))
+    (cons symbol doc)))
+
 (defun ellm--extract-definitions-in-buffer ()
   "Extract all variable and function definitions in the current buffer."
   (interactive)
@@ -1068,46 +1109,42 @@ Will call `json-encode' on `DATA' if
         (variables '()))
     (save-excursion
       (goto-char (point-min))
-      (while (re-search-forward "^(defvar|defcustom " nil t)
-        (push `((,(symbol-at-point) . (documentation (symbol-at-point)))) variables))
+      (while (re-search-forward "^(\\(?:defvar\\|defcustom\\) " nil t)
+        (push (ellm--extract-symbol-definition-at-point 'variable) variables))
       (goto-char (point-min))
       (while (re-search-forward "^(defun " nil t)
-        (push `((,(symbol-at-point) . ,(documentation (symbol-at-point)))) functions)))
+        (push (ellm--extract-symbol-definition-at-point) functions)))
     `((variables . ,(nreverse variables)) (functions . ,(nreverse functions)))))
 
-(require 'imenu)
-
-(defun ellm--extract-definitions-using-imenu ()
-  "Extract all variable and function definitions in the current buffer using imenu."
+(defun ellm--extract-and-show-definitions-in-json ()
+  "Extract and print all variable and function definitions in the current buffer."
   (interactive)
-  (let ((imenu-auto-rescan t)  ; Ensure imenu index is up-to-date
-        (functions '())
-        (variables '()))
-    ;; Generate or update the imenu index
-    (imenu--make-index-alist t)
-    ;; Loop through the imenu index
-    (dolist (item imenu--index-alist)
-      (cond
-       ;; Check if the item is a function definition
-       ((string-match-p "\\`Functions" (car item))
-        (dolist (func (cdr item))
-          (let ((func-name (intern (car func))))
-            (push `((,(car func) . ,(condition-case nil
-                                         (documentation func-name)
-                                       (error "No documentation available"))))
-                   functions))))
-       ;; Check if the item is a variable definition
-       ((string-match-p "\\`Variables" (car item))
-        (dolist (var (cdr item))
-          (let ((var-name (intern (car var))))
-            (if (and (boundp var-name) (functionp (symbol-value var-name)))
-                (push `((,(car var) . "Customizable variable of type function.")) variables)
-              (push `((,(car var) . ,(condition-case nil
-                                          (documentation-property var-name 'variable-documentation)
-                                        (error "No documentation available"))))
-                     variables))))))
-    ;; Combine and return the results
-    `((variables . ,(nreverse variables)) (functions . ,(nreverse functions))))))
+  (let* ((definitions (ellm--extract-definitions-in-buffer))
+         (json-string (json-encode definitions)))
+    (with-current-buffer (get-buffer-create "*Definitions JSON*")
+      (erase-buffer)
+      (insert json-string)
+      (json-pretty-print-buffer)
+      (display-buffer (current-buffer)))))
+
+(defun ellm--extract-and-save-definitions-in-json (filename)
+  "Extract and save all definitions in the current buffer to `FILENAME'.
+
+Note that `FILENAME' should be an absolute path to the file."
+  (interactive "FEnter filename to save definitions: ")
+  (let* ((definitions (ellm--extract-definitions-in-buffer)))
+    (ellm--save-object-in-json definitions filename)))
+
+(defun ellm--save-object-in-json (object filename)
+  "Save an `OBJECT' to a `FILENAME' in JSON format."
+  (interactive)
+  (let* ((json-string (json-encode object)))
+    (with-temp-file filename
+      (insert json-string)
+      (json-pretty-print (point-min) (point-max) 'minimize)
+      (buffer-substring-no-properties (point-min) (point-max))
+      (newline)))
+  nil)
 
 (defun ellm--setup-org-capture ()
   "Add the ellm capture template to `org-capture-templates'."
