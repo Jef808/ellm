@@ -21,6 +21,7 @@
 
 (require 'f)
 (require 'json)
+(require 'project)
 (require 'markdown-mode)
 (require 'org-capture)
 (require 'org-element)
@@ -29,7 +30,6 @@
 (require 'ox-html)
 (require 'savehist)
 (require 'url)
-(require 'know-your-http-well)
 
 (defgroup ellm nil
   "Make API calls to LLMs."
@@ -69,7 +69,7 @@
   :group 'ellm)
 
 (defcustom ellm--conversations-dir
-  (directory-file-name (expand-file-name ".ellm" "~/"))
+  (directory-file-name (expand-file-name ".ellm/" "~/"))
   "The directory to store conversation history."
   :type 'string
   :group 'ellm)
@@ -521,6 +521,15 @@ The `GET-API-KEY' function is used to retrieve the api key for anthropic."
     ("anthropic-version" . "2023-06-01")
     ("Content-Type" . "application/json; charset=utf-8")))
 
+(defun ellm--serialize-conversation (conversation)
+  "Serialize the `CONVERSATION' to a JSON string."
+  (let (messages)
+    (dolist (msg (alist-get 'messages conversation) messages)
+      (push `((role . ,(substring (symbol-name (alist-get 'role msg)) 1))
+              (content . ,(alist-get 'content msg)))
+            messages))
+    (json-serialize (seq-uniq (append `((messages . ,(vconcat messages))) conversation)))))
+
 (defun ellm--prepare-request-body-default (conversation)
   "Prepare the messages list with a new user message based on `CONVERSATION'."
   (let ((data (copy-alist conversation)))
@@ -538,7 +547,7 @@ The `GET-API-KEY' function is used to retrieve the api key for anthropic."
   (let ((data (copy-alist conversation)))
     (setf (alist-get 'title data nil t) nil)
     (setf (alist-get 'id data nil t) nil)
-    (json-encode data)))
+    (ellm--serialize-conversation data)))
 
 (defun ellm--prepare-request-body (conversation)
   "Prepare the API call body to send `CONVERSATION'."
@@ -555,28 +564,30 @@ The `GET-API-KEY' function is used to retrieve the api key for anthropic."
         (error "ellm--get-url: Unknown provider or missing base url: %s"
                (symbol-name provider)))))
 
-(require 'projectile)
-
-(defun ellm--get-conversation-filename ()
+(defun ellm--get-conversation-file-path ()
   "Get the filename for the conversation."
   (let ((filename-suffix
-         (if (and (use-region-p) (projectile-project-p))
-             (concat (f-filename (projectile-project-root)) ".org")
-           "general.org")))
-    (f-join ellm--conversations-dir (concat ellm--conversations-filename-prefix
-                                            filename-suffix))))
+         (if-let ((current (project-current)))
+             (project-name current)
+           "general")))
+    (f-join ellm--conversations-dir
+            (concat ellm--conversations-filename-prefix
+                    filename-suffix
+                    ".org"))))
 
-(defun ellm-chat (&optional current-conversation next-prompt)
+(defun ellm-chat (&optional current-conversation conversation-filepath next-prompt)
   "Send a request to the current provider's chat completion endpoint.
 
 Unless `NEXT-PROMPT' is non-nil, the next prompt is read interactively
 from the minibuffer. When `CURRENT-CONVERSATION' is a valid conversation object,
-that conversation is continued with the next prompt and associated response."
+that conversation is continued with the next prompt and associated response.
+When `CONVERSATION-FILEPATH' is non-nil,the conversation is saved to that file."
   (interactive)
   (let* ((prompt-message (if current-conversation
                              "Enter your next prompt: "
                            "Enter your prompt: "))
          (prompt (or next-prompt (read-string prompt-message)))
+         (filepath (or conversation-filepath (ellm--get-conversation-file-path)))
          (conversation (or
                         (and current-conversation
                              (ellm--add-user-message prompt current-conversation))
@@ -589,13 +600,15 @@ that conversation is continued with the next prompt and associated response."
          (url-request-data request-body))
       (ellm--log-request-headers request-headers)
       (ellm--log-request-body request-body)
-      (url-retrieve url #'ellm--handle-response (list conversation)))
+      (url-retrieve url #'ellm--handle-response (list filepath conversation)))
   nil)
 
-(defun ellm--handle-response (status conversation-data)
-  "Handle the response to the prompt made using `CONVERSATION-DATA'.
+(defun ellm--handle-response (status conversation-filepath conversation)
+  "Handle the response to the prompt made using `CONVERSATION'.
 
-Information about the response is contained in `STATUS' (see `url-retrieve')."
+Information about the response is contained in `STATUS' (see `url-retrieve').
+The response is added to the `CONVERSATION' and the conversation is added or
+updated in the file at `CONVERSATION-FILEPATH'."
   (cond ((plist-get status :error)
          (ellm--log-http-error status))
         ((plist-get status :redirect)
@@ -604,32 +617,39 @@ Information about the response is contained in `STATUS' (see `url-retrieve')."
          (goto-char url-http-end-of-headers)
          (if (<= (point-max) (point))
              (ellm--log-no-response-body)
-           (let ((parsed-response (ellm--parse-json-response)))
-             (when parsed-response
-               (ellm--add-response-to-conversation parsed-response conversation-data)))))))
+           (let ((response (ellm--parse-json-response)))
+             (when response
+               (ellm--add-response-to-conversation conversation-filepath conversation response)))))))
 
-(defun ellm--add-response-to-conversation (parsed-response conversation)
-  "Process the `PARSED-RESPONSE' from the API call made with config `CONVERSATION'."
+(defun ellm--add-response-to-conversation (conversation-filepath conversation response)
+  "Process the `RESPONSE' from the API call made with config `CONVERSATION'.
+
+The `RESPONSE' should be an emacs-lisp hash table.
+The `CONVERSATION' is then saved to the file at `CONVERSATION-FILEPATH'."
+  (unless (hash-table-p response)
+    (error "ellm--add-response-to-conversation: Expected cons, got %s" (type-of response)))
   (let* ((provider (ellm--get-model-provider conversation))
          (config (ellm--get-provider-configuration provider))
          (parse-response (alist-get 'parse-response config))
-         (response-content (funcall parse-response parsed-response)))
+         (response-content (funcall parse-response response)))
     (ellm--handle-assistant-response response-content conversation)
     (ellm--log-conversation conversation)
-    (ellm--insert-conversation-into-org conversation)))
+    (ellm--insert-conversation-into-org conversation-filepath conversation)))
 
 (defun ellm--handle-assistant-response (response conversation)
-  "Add the `RESPONSE' to the `CONVERSATION'."
+  "Add the `RESPONSE' to the `CONVERSATION'.
+
+The `RESPONSE' is expected to be a string."
+  (unless (stringp response)
+    (error "ellm--handle-assistant-response: Expected string, got %s" (type-of response)))
   (let* ((split-response (ellm--split-response response))
          (title (elt split-response 0))
          (content (elt split-response 1)))
     (ellm--add-or-update-title title conversation)
     (ellm--add-assistant-message content conversation)))
 
-(require 'popup)
-
-(defun ellm--insert-conversation-into-org (conversation)
-  "Insert the `CONVERSATION' into the org file."
+(defun ellm--insert-conversation-into-org (conversation-filepath conversation)
+  "Insert the `CONVERSATION' into the org file at `CONVERSATION-FILEPATH'."
   (let* ((messages (alist-get 'messages conversation))
          (number-previous-messages (- (length messages) 2))
          (previous-messages (take number-previous-messages messages))
@@ -639,7 +659,7 @@ Information about the response is contained in `STATUS' (see `url-retrieve')."
          (temperature (alist-get 'temperature conversation))
          (id (alist-get 'id conversation))
          (buffer (if ellm-save-conversations
-                     (find-file-noselect ellm--conversations-file)
+                     (find-file-noselect conversation-filepath)
                    (get-buffer-create ellm--temp-conversations-buffer-name)))
          (stringified-previous-messages (ellm--messages-to-string previous-messages "**"))
          (org-formatted-new-messages (ellm--convert-messages-to-org new-messages))
@@ -650,25 +670,23 @@ Information about the response is contained in `STATUS' (see `url-retrieve')."
                                org-formatted-new-messages)))
     (ellm--log-org-messages messages-to-insert)
     (with-current-buffer buffer
-      (org-mode)
-      (when (not ellm-save-conversations)
-        (local-set-key (kbd "q") #'+popup/close))
+      (delay-mode-hooks (org-mode))
+      (when (fboundp '+popup/close)
+        (local-set-key (kbd "q") '+popup/close))
       (read-only-mode -1)
-      (save-excursion
-        (if-let ((pos (and ellm-save-conversations (org-id-find id 'marker))))
-            (progn (goto-char pos)
-                   (org-cut-subtree))
-          (setq id (or id (org-id-new))))
-        (goto-char (point-min))
-        (ellm--insert-heading-and-metadata title id model temperature)
-        (insert messages-to-insert)
-        (when ellm-save-conversations
-          (save-buffer))
-        (read-only-mode 1)
-        (org-up-heading-safe)
-        (ellm--display-conversations-buffer)
-        (when ellm-auto-export
-          (ellm-export-conversation))))))
+      (if-let ((pos (and ellm-save-conversations (org-id-find id 'marker))))
+          (progn (goto-char pos)
+                 (org-cut-subtree))
+        (setq id (or id (org-id-new))))
+      (goto-char (point-min))
+      (ellm--insert-heading-and-metadata title id model temperature)
+      (insert messages-to-insert)
+      (when ellm-save-conversations
+        (save-buffer))
+      (read-only-mode +1)
+      (ellm--display-conversations-buffer)
+      (when ellm-auto-export
+        (ellm-export-conversation)))))
 
 (defun ellm--insert-heading-and-metadata (title id model temperature)
   "Insert an Org heading with properties TITLE, ID, MODEL, and TEMPERATURE."
@@ -799,24 +817,34 @@ an argument.
 When `ellm-save-conversations' is non-nil, the conversation
 at point will be removed from the org document and the updated conversation
 will be inserted at the top of the document."
-  (let ((conversation-pos
-         (or (org-id-find id 'marker)
-             (error "Conversation with id %s not found" id))))
-      (save-excursion
-        (goto-char conversation-pos)
-        (let ((conversation (ellm--parse-conversation)))
-          (setf (alist-get 'system conversation) (concat ellm-system-message ellm--system-message-suffix)
-                (alist-get 'max_tokens conversation) ellm-max-tokens
-                (alist-get 'temperature conversation) ellm-temperature)
-          (ellm--set-model (alist-get 'model conversation))
-          (ellm-chat conversation prompt)))))
+  (let* ((pos
+          (if id (org-id-find id 'marker) (point)))
+         (result
+          (save-excursion
+            (goto-char pos)
+            (cons (buffer-file-name (current-buffer)) (ellm--parse-conversation))))
+         (filepath (car result))
+         (conversation (cdr result)))
+    (setf (alist-get 'system conversation) (concat ellm-system-message ellm--system-message-suffix)
+          (alist-get 'max_tokens conversation) ellm-max-tokens
+          (alist-get 'temperature conversation) ellm-temperature)
+    (ellm--set-model (alist-get 'model conversation))
+    (ellm-chat conversation filepath prompt)))
+
+(defun ellm--conversation-subtree ()
+  "Return the current conversation subtree."
+  (save-restriction
+    (progn
+      (org-narrow-to-subtree)
+      (car (org-element-contents (org-element-parse-buffer))))))
 
 (defun ellm--parse-conversation ()
   "Parse the current org subtree into a conversation object.
 
-Note that any trailing timestamp in the conversation title is removed."
+It is assumed that the point is located at the beginning of a
+conversation's title."
   (let* (result
-         (subtree (ellm--conversation-at-point))
+         (subtree (ellm--conversation-subtree))
          (title (org-element-property :raw-value subtree))
          (msg (message "***TITLE: %s" title))
          (effective-title (when (string-match org-element--timestamp-regexp title)
@@ -828,21 +856,6 @@ Note that any trailing timestamp in the conversation title is removed."
       (push (cons 'messages messages) result)
       (push (cons 'system (concat ellm-system-message ellm--system-message-suffix)) result)
       result))
-
-(defun ellm--conversation-at-point ()
-  "Return the conversation at point as an org element subtree."
-  (unless (or (equal (buffer-name (current-buffer)) ellm--temp-conversations-buffer-name)
-              (f-equal-p (buffer-file-name (current-buffer)) ellm--conversations-file))
-    (error "Not in the conversations file"))
-  (when (org-before-first-heading-p)
-    (error "Point is not within a conversation"))
-  (save-excursion
-    (ellm--goto-conversation-top)
-    (org-narrow-to-subtree)
-    (let ((conversation
-           (unwind-protect (car (org-element-contents (org-element-parse-buffer))))))
-      (widen)
-      conversation)))
 
 (defun ellm--metadata-from-subtree (subtree)
   "Extract metadata from an org `SUBTREE' conversation."
@@ -870,12 +883,17 @@ Note that any trailing timestamp in the conversation title is removed."
     (insert (org-element-interpret-data org-element))
     (s-trim (buffer-substring-no-properties (point-min) (point-max)))))
 
-(defun ellm--error-if-not-conversation-buffer ()
-  "Raise an error if the current buffer is not the conversations buffer."
-  (unless (or (and (f-equal-p (buffer-file-name (current-buffer)) ellm--conversations-file)
-                   (not (org-before-first-heading-p)))
-              (equal (buffer-name) ellm--temp-conversations-buffer-name))
-    (user-error "Point is not within a conversation")))
+(defun ellm--point-at-conversation-p ()
+  "Return non-nil if point is within a conversation subtree."
+  (and
+   (eq major-mode 'org-mode)
+   (or (and
+        (f-equal-p (f-dirname (buffer-file-name (current-buffer)))
+                   ellm--conversations-dir)
+        (string-prefix-p ellm--conversations-filename-prefix
+                         (f-filename (buffer-file-name (current-buffer)))))
+       (equal (buffer-name) ellm--temp-conversations-buffer-name))
+   (not (org-before-first-heading-p))))
 
 (defun ellm-chat-at-point (&optional prompt)
   "Resume the conversation at point.
@@ -885,7 +903,8 @@ the point be within some conversation subtree.
 In that case, that conversation is resumed with the next user message.
 Optionally, the content of that message can be passed as the `PROMPT' argument."
   (interactive)
-  (ellm--error-if-not-conversation-buffer)
+  (unless (ellm--point-at-conversation-p)
+    (user-error "Point is not within a conversation"))
   (let ((id (org-entry-get (point) "ID" t)))
     (ellm--resume-conversation id prompt)))
 
@@ -900,19 +919,44 @@ conversation can be specified to continue that conversation."
     (ellm-chat nil prompt)))
 
 (defun ellm--display-conversations-buffer ()
-  "Prepare the conversations buffer for viewing."
+  "Prepare the conversations buffer for viewing.
+
+It is assumed that the current buffer is the conversations buffer."
+  (display-buffer (current-buffer))
   (org-overview)
   (ellm--goto-first-top-level-heading)
   (org-fold-show-subtree)
-  (display-buffer (current-buffer)))
+  (if-let* ((headlines
+               (org-element-map (ellm--conversation-subtree) 'headline 'identity))
+              (last-user-message
+               (cl-find-if
+                (lambda (hl) (string-match-p "User" (org-element-property :raw-value hl)))
+                headlines
+                :from-end t)))
+      (progn
+        (goto-char (org-element-property :begin last-user-message))
+        (recenter-top-bottom 0)
+        (org-next-visible-heading 1))
+    (message "No assistant messages found")))
 
-(defun ellm-show-conversations-buffer ()
-  "Show the conversations in the `ellm--conversations-file'."
+(defun ellm-show-conversations-buffer (&optional filepath)
+  "Show the conversations contined in the conversations file.
+
+Which file that is is determined by `ellm--get-conversations-file-path',
+unless `FILEPATH' is non-nil in which case that file is used."
   (interactive)
-  (let ((buffer (find-file-other-window ellm--conversations-file)))
+  (let* ((path
+           (cond ((not (null filepath)) filepath)
+                 ((called-interactively-p 'interactive)
+                  (read-file-name "Select conversation file: " ellm--conversations-dir nil t "/"
+                                  (lambda (f)
+                                    (and
+                                     (equal (file-name-extension f) "org")
+                                     (string-prefix-p ellm--conversations-filename-prefix (f-filename f))))))
+                 (t (ellm--get-conversation-file-path))))
+         (buffer (find-file-other-window path)))
     (with-current-buffer buffer
-      (unless (eq major-mode 'org-mode)
-        (org-mode))
+      (delay-mode-hooks (org-mode))
       (read-only-mode 1)
       (org-overview)
       (ellm--org-apply-rating-face))))
@@ -921,22 +965,24 @@ conversation can be specified to continue that conversation."
   "Mark the current conversation in the `ellm--conversations-file'."
   (interactive)
   (save-excursion
-    (ellm--goto-conversation-top)
+    (ellm--goto-conversation-top-new)
     (let ((html-file (org-html-export-to-html nil 'subtree)))
       (browse-url html-file))))
 
-(defun ellm--get-first-conversation-id ()
-  "Get the ID of the first conversation in the `ellm--conversations-file'."
-  (with-current-buffer (find-file-noselect ellm--conversations-file)
-    (goto-char (point-min))
-    (org-goto-first-child)
-    (org-entry-get (point) "ID")))
-
 (defun ellm--goto-conversation-top ()
-  "Go to the top of the current conversation in the `ellm--conversations-file'."
-  (org-up-heading-safe)
-  (while (not (= (or (org-element-property :level (org-element-at-point)) -1) 1))
-    (org-up-heading-safe)))
+  "Go to the top of the current conversation in the current buffer."
+  (unless (ellm--point-at-conversation-p)
+    (user-error "Point is not within a conversation"))
+  (if-let* ((top-headline-p
+             (lambda (el) (and (eq 'headline (org-element-type el))
+                               (eql 1 (org-element-property :level el)))))
+            (ancestors (org-element-lineage (org-element-at-point)))
+            (top-headline
+             (cl-find-if top-headline-p
+                         ancestors
+                         :from-end)))
+      (goto-char (org-element-property :begin top-headline))
+    (error "No top-level headline found")))
 
 (defun ellm--goto-first-top-level-heading ()
   "Go to the first top-level heading in the current buffer."
@@ -986,13 +1032,13 @@ Will call `json-encode' on `DATA' if
 
 (defun ellm--log-http-error (status)
   "Log HTTP `STATUS' errors."
-  (let ((err (plist-get status :error)))
-    (ellm--log (http-status-code (number-to-string (car (last err)))) "HTTP-ERROR" t)))
+  (ellm--log (if (fboundp 'http-status-code)
+                 (http-status-code status)
+               (plist-get status :error) "HTTP-ERROR" t)))
 
 (defun ellm--log-http-redirect (status)
   "Log HTTP `STATUS' redirects."
   (ellm--log (plist-get status :redirect) "HTTP-REDIRECT") t)
-
 (defun ellm--log-no-response-body ()
   "Log that were no response body."
   (ellm--log "No response body (DNS resolve or TCP error)" "REQUEST-ERROR" t))
@@ -1038,12 +1084,16 @@ Will call `json-encode' on `DATA' if
 (defun ellm--org-rate-response (rating)
   "Rate the current org headline with a RATING."
   (interactive "sRate the conversation (1-5): ")
-  (ellm--error-if-not-conversation-buffer)
+  (unless (ellm--point-at-conversation-p)
+    (user-error "Point is not within a conversation"))
   (let ((valid-ratings '("1" "2" "3" "4" "5")))
     (if (member rating valid-ratings)
-        (save-excursion
-          (ellm--goto-conversation-top)
-          (org-set-property "RATING" rating)
+        (progn
+          (read-only-mode -1)
+          (save-excursion
+            (ellm--goto-conversation-top)
+            (org-set-property "RATING" rating))
+          (read-only-mode +1)
           (save-buffer))
       (error "Invalid rating. Please enter a value between 1 and 5"))))
 
@@ -1075,20 +1125,16 @@ Will call `json-encode' on `DATA' if
   (ellm--org-rate-response rating)
   (org-redisplay-inline-images)
   (save-restriction
-    (unwind-protect
-        (progn
-          (ellm--goto-conversation-top)
-          (org-narrow-to-element)
-          (ellm--org-apply-rating-face))
-      (widen))))
+    (save-excursion
+      (ellm--goto-conversation-top)
+      (org-narrow-to-element)
+      (ellm--org-apply-rating-face))))
 
 (defun ellm-fold-conversations-buffer ()
   "Fold all conversations in the `ellm--conversations-file'."
   (interactive)
-  (with-current-buffer (get-file-buffer ellm--conversations-file)
-    (goto-char (point-min))
-    (org-overview)
-    (ellm--goto-first-top-level-heading)))
+  (org-overview)
+  (ellm--goto-first-top-level-heading))
 
 (defun ellm--extract-symbol-definition-at-point (&optional variablep)
   "Extract the definition of the symbol at point.
@@ -1120,7 +1166,7 @@ If `VARIABLEP' is non-nil, treat the symbol as a variable."
   "Extract and print all variable and function definitions in the current buffer."
   (interactive)
   (let* ((definitions (ellm--extract-definitions-in-buffer))
-         (json-string (json-encode definitions)))
+         (json-string (json-serialize definitions)))
     (with-current-buffer (get-buffer-create "*Definitions JSON*")
       (erase-buffer)
       (insert json-string)
@@ -1138,7 +1184,7 @@ Note that `FILENAME' should be an absolute path to the file."
 (defun ellm--save-object-in-json (object filename)
   "Save an `OBJECT' to a `FILENAME' in JSON format."
   (interactive)
-  (let* ((json-string (json-encode object)))
+  (let* ((json-string (json-serialize object)))
     (with-temp-file filename
       (insert json-string)
       (json-pretty-print (point-min) (point-max) 'minimize)
@@ -1201,11 +1247,11 @@ MAX-TOKENS: %^{Max Tokens|%(number-to-string (symbol-value 'ellm-max-tokens))}
          (temperature (string-to-number (cdr (assoc "TEMPERATURE" drawer-content))))
          (max-tokens (string-to-number (cdr (assoc "MAX-TOKENS" drawer-content))))
          (user-message "--TODO_PLACEHOLDER")
-         (json-object `(("model" . ,model)
-                        ("temperature" . ,temperature)
-                        ("max_tokens" . ,max-tokens)
-                        ("prompt" . ,(concat ellm-system-message "\n" user-message)))))
-    (json-encode json-object)))
+         (json-object `((model . ,model)
+                        (temperature . ,temperature)
+                        (max_tokens . ,max-tokens)
+                        (prompt . ,(concat ellm-system-message "\n" user-message)))))
+    (json-serialize json-object)))
 
 ;;;###autoload
 (define-minor-mode ellm-mode
