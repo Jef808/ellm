@@ -23,7 +23,6 @@
 (require 'json)
 (require 'project)
 (require 'markdown-mode)
-(require 'org-capture)
 (require 'org-element)
 (require 'org-fold)
 (require 'org-id)
@@ -1192,67 +1191,6 @@ Note that `FILENAME' should be an absolute path to the file."
       (newline)))
   nil)
 
-(defun ellm--setup-org-capture ()
-  "Add the ellm capture template to `org-capture-templates'."
-  (let* ((org-capture-template
-          '(";" "LLM Prompt" entry (file "~/.llm/conversations.org")
-           "* TITLE
-:PROPERTIES:
-:ID:       %(org-id-new)
-:TIMESTAMP: %U
-:END:
-#+begin_drawer
-MODEL: %^{Model|%(symbol-value 'ellm-model)|%(mapconcat 'cdr (append ellm--openai-models-alist ellm--anthropic-models-alist) \"|\")}
-TEMPERATURE: %^{Temperature|%(number-to-string (symbol-value 'ellm-temperature))}
-MAX-TOKENS: %^{Max Tokens|%(number-to-string (symbol-value 'ellm-max-tokens))}
-#+end_drawer
-
-%?
-"
-           :prepend t))
-        (existing-index (cl-position ?\; org-capture-templates :test #'equal)))
-    (if existing-index
-        (setf (nth existing-index org-capture-templates) org-capture-template)
-      (push org-capture-template org-capture-templates))
-    (advice-add 'org-capture :around #'ellm--org-capture-to-read-only-buffer))
-  nil)
-
-(defun ellm--org-capture-to-read-only-buffer (orig-fun &rest args)
-  "Used to advise `ORIG-FUN', disabling `read-only-mode' temporarily.
-
-`ARGS' are passed to `ORIG-FUN'."
-  (let ((target-buffer (find-file-noselect ellm--conversations-file)))
-      (with-current-buffer target-buffer
-        ;; Store original read-only state
-        (let ((read-only-original buffer-read-only))
-          (unwind-protect
-              (progn
-                ;; Temporarily disable read-only
-                (read-only-mode -1)
-                ;; Call original org-capture function
-                (apply orig-fun args))
-            (read-only-mode (if read-only-original 1 -1)))))))
-
-(defun ellm--template-to-json (template)
-  "Convert an `org-capture' `TEMPLATE' to a JSON object."
-  (let* ((lines (split-string template "\n"))
-         (drawer-content (cl-loop for line in lines
-                                  when (string-match
-                                        "^\\MODEL\\|TEMPERATURE\\|MAX-TOKENS\\): \\(.+\\)$" line)
-                                  collect (cons (match-string 1 line) (match-string 2 line))))
-         (prompt (cl-loop for line in lines
-                          until (string-match "^%\\(.*\\)$" line)
-                          finally return (match-string 1 line)))
-         (model (cdr (assoc "MODEL" drawer-content)))
-         (temperature (string-to-number (cdr (assoc "TEMPERATURE" drawer-content))))
-         (max-tokens (string-to-number (cdr (assoc "MAX-TOKENS" drawer-content))))
-         (user-message "--TODO_PLACEHOLDER")
-         (json-object `((model . ,model)
-                        (temperature . ,temperature)
-                        (max_tokens . ,max-tokens)
-                        (prompt . ,(concat ellm-system-message "\n" user-message)))))
-    (json-serialize json-object)))
-
 ;;;###autoload
 (define-minor-mode ellm-mode
   "Minor mode for interacting with LLMs."
@@ -1274,7 +1212,6 @@ MAX-TOKENS: %^{Max Tokens|%(number-to-string (symbol-value 'ellm-max-tokens))}
 (define-globalized-minor-mode global-ellm-mode ellm-mode
   (lambda ()
     (ellm--setup-persistance)
-    (ellm--setup-org-capture)
     (ellm-mode 1)))
 
 (provide 'ellm)
