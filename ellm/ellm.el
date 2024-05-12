@@ -183,12 +183,11 @@ Your title here
 Your response here"
   "The system message suffix to append to the system message.")
 
-(defcustom ellm-prompt-context-fmt-string "Consider the following CONTEXT :\n\n```%s\n%s\n```\n\n"
+(defvar ellm-prompt-context-fmt-string
+  "## CONTEXT:\n```%s\n%s\n```\n\n## USER:\n"
   "The format string to use with `format' for building the context message.
 This message will be prepended to the first user prompt of a conversation.
-See `ellm--make-context-message' for usage details."
-  :type 'string
-  :group 'ellm)
+See `ellm--add-context-from-region' for usage details.")
 
 (defvar ellm-auto-export nil
   "If non-nil, the chat is being conducted in an external chat buffer.")
@@ -434,35 +433,61 @@ When togling off, restore the previously set values."
           ellm-model-size (plist-get model-properties :size))))
 
 (defvar ellm--major-mode-to-org-lang-alist
-  '((python-mode . "python")
+  '((python-ts-mode . "python")
+    (python-mode . "python")
     (emacs-lisp-mode . "emacs-lisp")
     (org-mode . "org")
-    (lua-mode . "lua"))
+    (lua-mode . "lua")
+    (c-or-c++-mode . "cpp")
+    (c-or-c++-ts-mode . "cpp"))
   "Alist mapping major modes to Org mode source block languages.")
 
 (defun ellm--add-context-from-region (prompt)
-  "Use the active region if any to enhance the `PROMPT' with context.
-If a region is marked, use the `ellm-context-fmt-string' template
-to add context from that region. In that case, the current buffer's
-major mode is used according to `ellm--major-mode-to-org-lang-alist'
-for determining the language with which to format the context."
+  "Use the active region if any to attach context to the `PROMPT' string.
+Use the `ellm-context-fmt-string' template to add context from that region
+in the form of a markdown code block.
+To determine the language label of the code block,
+a lookup to `ellm--major-mode-to-org-lang-alist' with the buffer's major mode
+is used except for the special case of `org-mode'.
+If the buffer's major mode is `org-mode' and a region within an org code
+block is marked, use the source block's language."
   (let ((prefix
          (when (use-region-p)
-           (format ellm-prompt-context-fmt-string
-                   (or (cdr (assoc major-mode ellm--major-mode-to-org-lang-alist)) "text")
-                   (buffer-substring-no-properties (region-beginning) (region-end))))))
-        (deactivate-mark)
+           (let* ((r-beg (region-beginning))
+                  (r-end (region-end))
+                  (mode major-mode)
+                  (lang (or (alist-get mode ellm--major-mode-to-org-lang-alist "text"))))
+             (when (eq mode 'org-mode)
+               (deactivate-mark)
+               (save-excursion
+                 (goto-char r-beg)
+                 (let* ((el (org-element-at-point-no-context))
+                        (el-beg (org-element-property :begin el))
+                        (el-end (org-element-property :end el)))
+                   (when (and (eq (org-element-type el) 'src-block)
+                              (<= el-beg r-beg)
+                              (>= el-end r-end))
+                     (progn
+                       (setq lang (org-element-property :language el))
+                       (let ((cmp-lines
+                              (lambda (op p q)
+                                (let ((p-line (progn (goto-char p)
+                                                     (line-number-at-pos)))
+                                      (q-line (progn (goto-char q)
+                                                     (line-number-at-pos))))
+                                  (funcall op p-line q-line)))))
+                         (when (funcall cmp-lines #'= r-beg el-beg)
+                           (goto-char el-beg)
+                           (setq r-beg (+ (line-end-position) 1)))
+                         (goto-char (- el-end (+ (org-element-property :post-blank el) 1)))
+                         (goto-char (line-beginning-position))
+                         (when (<= (point) r-end)
+                           (setq r-end (- (point) 1)))))))))
+             (format ellm-prompt-context-fmt-string
+                     lang
+                     (buffer-substring-no-properties r-beg r-end))))))
     (concat prefix prompt)))
 
-(defun ellm--context-prefix-from-region ()
-  "Return the context prefix from the active region for user prompt."
-  (when (use-region-p)
-    (let ((prefix
-           (format ellm-prompt-context-fmt-string
-                   (or (cdr (assoc major-mode ellm--major-mode-to-org-lang-alist)) "text")
-                   (buffer-substring-no-properties (region-beginning) (region-end)))))
-      (deactivate-mark)
-      prefix)))
 
 (defun ellm--make-message (role content)
   "Create a message with the given `ROLE' and `CONTENT'."
@@ -481,15 +506,16 @@ for determining the language with which to format the context."
 
 (defun ellm--add-assistant-message (content conversation)
   "Append an assistant message with `CONTENT' to the `CONVERSATION'."
-  (nconc (alist-get 'messages conversation)
-         (list (ellm--make-message :assistant content))))
+  (and (nconc (alist-get 'messages conversation)
+              (list (ellm--make-message :assistant content)))
+       conversation))
 
 (defun ellm--initialize-conversation (prompt)
   "Initialize a new conversation starting with `PROMPT'.
 
 Return the conversation-data alist."
-  (let* ((effective-prompt (ellm--add-context-from-region prompt))
-         (user-message (ellm--make-message :user effective-prompt)))
+  (let* ((contextualized-prompt (ellm--add-context-from-region prompt))
+         (user-message (ellm--make-message :user contextualized-prompt)))
     `((messages . (,user-message))
       (temperature . ,ellm-temperature)
       (max_tokens . ,ellm-max-tokens)
@@ -807,28 +833,21 @@ where [HC] is `HEADLINE-CHAR' or \"#\" by default."
     org-string))
 
 (defun ellm--resume-conversation (id &optional prompt)
-  "Resume a previous conversation.
+  "Resume a previous conversation with given `ID'.
 
-When `ID' is nil, resume the latest conversation
-appearing in `ellm--conversations-file'.
 Optionally, the `PROMPT' for the next user message can be passed as
 an argument.
 When `ellm-save-conversations' is non-nil, the conversation
 at point will be removed from the org document and the updated conversation
 will be inserted at the top of the document."
-  (let* ((pos
-          (if id (org-id-find id 'marker) (point)))
-         (result
-          (save-excursion
-            (goto-char pos)
-            (cons (buffer-file-name (current-buffer)) (ellm--parse-conversation))))
-         (filepath (car result))
-         (conversation (cdr result)))
-    (setf (alist-get 'system conversation) (concat ellm-system-message ellm--system-message-suffix)
-          (alist-get 'max_tokens conversation) ellm-max-tokens
-          (alist-get 'temperature conversation) ellm-temperature)
-    (ellm--set-model (alist-get 'model conversation))
-    (ellm-chat conversation filepath prompt)))
+  (when-let* ((pos (org-id-find id 'marker))
+              (conversation (save-excursion (goto-char pos) (ellm--parse-conversation))))
+    (let ((filepath (buffer-file-name (current-buffer))))
+      (setf (alist-get 'system conversation) (concat ellm-system-message ellm--system-message-suffix)
+            (alist-get 'max_tokens conversation) ellm-max-tokens
+            (alist-get 'temperature conversation) ellm-temperature)
+      (ellm--set-model (alist-get 'model conversation))
+      (ellm-chat conversation filepath prompt))))
 
 (defun ellm--conversation-subtree ()
   "Return the current conversation subtree."
@@ -845,7 +864,6 @@ conversation's title."
   (let* (result
          (subtree (ellm--conversation-subtree))
          (title (org-element-property :raw-value subtree))
-         (msg (message "***TITLE: %s" title))
          (effective-title (when (string-match org-element--timestamp-regexp title)
                             (s-trim (substring title 0 (match-beginning 0)))))
          (metadata (ellm--metadata-from-subtree subtree))
@@ -932,7 +950,7 @@ It is assumed that the current buffer is the conversations buffer."
                 (lambda (hl) (string-match-p "User" (org-element-property :raw-value hl)))
                 headlines
                 :from-end t)))
-      (progn
+      (with-selected-window (get-buffer-window (current-buffer))
         (goto-char (org-element-property :begin last-user-message))
         (recenter-top-bottom 0)
         (org-next-visible-heading 1))
