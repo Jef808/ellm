@@ -161,30 +161,46 @@
 (defvar ellm--test-mode nil
   "If non-nil, set LLM parameters to lowest token cost for testing purposes.")
 
+(defvar ellm-org--faces-alist
+  `((rating-5 '(:foreground "gold"))
+    (rating-4 '(:foreground "green"))
+    (rating-3 '(:foreground "yellow"))
+    (rating-2 '(:foreground "orange"))
+    (rating-1 '(:foreground "red"))
+    (message-title-user '(:foreground "green3"))
+    (message-title-assistant '(:foreground "blue"))
+    (message-title-system '(:foreground "purple")))
+  "Face for the ellm-org mode.")
+
 (defcustom ellm-system-message "You are a useful emacs-integrated general assistant.
 Your goal is to execute the user's task or precisely answer their questions, using all \
 the CONTEXT the user provides (if any).
-You are very cautious when providing information or making a claim, you thus always \
-accompany your answer with a thorough explanation or justification when something is not obvious.
-A user would always prefer you answering with a request for clarifications and/or questions when \
-you are unsure, they will then provide the relevant context for you to can accomplish your task."
+You are very cautious and give thorough justifications for each claim that you make.
+When you are not very confident about certain details, you say so and, if it can help, \
+ask the user for clarifications needed for those details."
   "The system message to set the stage for new conversations."
   :type 'string
   :group 'ellm)
 
-(defvar ellm--system-message-suffix "\nFinally, you should include a short summary title which describes the discussion, so that the user
-can later navigate through their history. Separate the summary title by a markdown horizontal \
-rule (i.e. a line consisting of three or more dashes). Your answer should thus be formatted as follows:
+(defvar ellm--system-message-suffix "\nFinally, you accompany any response with a short title \
+which describes the discussion.
+You separate the title and the response by a markdown horizontal \
+rule (i.e. a line consisting of three or more dashes).
+Your answers are thus formatted as follows:
 
 Your title here
 
 --------------------------------------------
 
-Your response here"
+Your response here.
+
+In your response, you tend to avoid unnecessary politeness formulae and purely
+organizational sections. You instead focus on examples and the technical aspects
+of the subject at hand."
   "The system message suffix to append to the system message.")
 
 (defvar ellm-prompt-context-fmt-string
-  "## CONTEXT:\n```%s\n%s\n```\n\n## USER:\n"
+  "## CONTEXT:\n```%s\n%s\n```\n\n## PROMPT:\n"
   "The format string to use with `format' for building the context message.
 This message will be prepended to the first user prompt of a conversation.
 See `ellm--add-context-from-region' for usage details.")
@@ -458,7 +474,6 @@ block is marked, use the source block's language."
                   (mode major-mode)
                   (lang (or (alist-get mode ellm--major-mode-to-org-lang-alist "text"))))
              (when (eq mode 'org-mode)
-               (deactivate-mark)
                (save-excursion
                  (goto-char r-beg)
                  (let* ((el (org-element-at-point-no-context))
@@ -483,6 +498,7 @@ block is marked, use the source block's language."
                          (goto-char (line-beginning-position))
                          (when (<= (point) r-end)
                            (setq r-end (- (point) 1)))))))))
+             (deactivate-mark)
              (format ellm-prompt-context-fmt-string
                      lang
                      (buffer-substring-no-properties r-beg r-end))))))
@@ -625,8 +641,9 @@ When `CONVERSATION-FILEPATH' is non-nil,the conversation is saved to that file."
          (url-request-data request-body))
       (ellm--log-request-headers request-headers)
       (ellm--log-request-body request-body)
-      (url-retrieve url #'ellm--handle-response (list filepath conversation)))
-  nil)
+      (url-retrieve url #'ellm--handle-response (list filepath conversation))
+      (message "...Sending request to %s..." (symbol-name (ellm--get-model-provider conversation)))
+  nil))
 
 (defun ellm--handle-response (status conversation-filepath conversation)
   "Handle the response to the prompt made using `CONVERSATION'.
@@ -634,6 +651,8 @@ When `CONVERSATION-FILEPATH' is non-nil,the conversation is saved to that file."
 Information about the response is contained in `STATUS' (see `url-retrieve').
 The response is added to the `CONVERSATION' and the conversation is added or
 updated in the file at `CONVERSATION-FILEPATH'."
+  (message "...Received response from %s..."
+           (symbol-name (ellm--get-model-provider conversation)))
   (cond ((plist-get status :error)
          (ellm--log-http-error status))
         ((plist-get status :redirect)
@@ -644,7 +663,9 @@ updated in the file at `CONVERSATION-FILEPATH'."
              (ellm--log-no-response-body)
            (let ((response (ellm--parse-json-response)))
              (when response
-               (ellm--add-response-to-conversation conversation-filepath conversation response)))))))
+               (ellm--add-response-to-conversation conversation-filepath conversation response)
+               (message "...Conversation updated..."))
+             response)))))
 
 (defun ellm--add-response-to-conversation (conversation-filepath conversation response)
   "Process the `RESPONSE' from the API call made with config `CONVERSATION'.
@@ -824,7 +845,7 @@ where [HC] is `HEADLINE-CHAR' or \"#\" by default."
 
 (defun ellm--markdown-to-org-sync (markdown-string)
   "Convert `MARKDOWN-STRING' from Markdown to Org using Pandoc."
-  (let* ((pandoc-command "pandoc -f markdown -t org --shift-heading-level-by=1")
+  (let* ((pandoc-command "pandoc -f markdown -t org --shift-heading-level-by=0")
          (org-string
           (with-temp-buffer
             (insert markdown-string)
@@ -866,33 +887,52 @@ conversation's title."
          (title (org-element-property :raw-value subtree))
          (effective-title (when (string-match org-element--timestamp-regexp title)
                             (s-trim (substring title 0 (match-beginning 0)))))
-         (metadata (ellm--metadata-from-subtree subtree))
-         (messages (ellm--messages-from-subtree subtree)))
+         (metadata (ellm-org--metadata-from-subtree subtree))
+         (messages (ellm-org--messages-from-subtree subtree)))
       (setq result metadata)
       (push (cons 'title effective-title) result)
       (push (cons 'messages messages) result)
       (push (cons 'system (concat ellm-system-message ellm--system-message-suffix)) result)
       result))
 
-(defun ellm--metadata-from-subtree (subtree)
+(defun ellm-org--metadata-from-subtree (subtree)
   "Extract metadata from an org `SUBTREE' conversation."
   (let ((id (org-element-property :ID subtree))
         (model (org-element-property :MODEL subtree))
         (temperature (string-to-number (org-element-property :TEMPERATURE subtree))))
     `((id . ,id) (model . ,model) (temperature . ,temperature))))
 
-(defun ellm--messages-from-subtree (subtree)
-  "Extract messages from an org `SUBTREE' conversation."
-  (let (result)
+(defun ellm-org--headling-message-p (hl)
+  "Return non-nil if the headline `HL' is a message."
+  (and (= (org-element-property :level hl) 2)
+       (member (org-element-property :raw-value hl)
+               '("User" "Assistant" "System"))))
+
+(defun ellm-org--message-visible-p (hl)
+  "Return non-nil if the message `HL' is visible."
+  (let ((beg (org-element-property :contents-begin hl)))
+    (null (get-char-property beg 'invisible))))
+
+(defun ellm-org--messages-from-subtree (subtree &optional invisible-ok)
+  "Extract the messages from an org `SUBTREE' conversation.
+
+When `INVISIBLE-OK' is non-nil, extract messages even if they are folded."
+  (interactive)
+  (let (messages)
     (org-element-map subtree 'headline
       (lambda (hl)
-        (let* ((title (org-element-property :raw-value hl))
-               (content (org-element-contents (car (org-element-contents hl)))))
-          (when (and (member title '("User" "Assistant")) content)
-            (let ((role (intern (concat ":" (downcase title))))
-                  (content-string (ellm--org-plain-text (cdr content))))
-              (push `((role . ,role) (content . ,content-string)) result))))))
-    (nreverse result)))
+        (when (and (ellm-org--headling-message-p hl)
+                   (or invisible-ok (ellm-org--message-visible-p hl)))
+          (let ((role
+                 (pcase (org-element-property :raw-value hl)
+                   ("User" :user)
+                   ("Assistant" :assistant)
+                   ("System" :system)))
+                (content
+                 (ellm--org-plain-text
+                  (cdr (org-element-contents (car (org-element-contents hl)))))))
+            (push `((role . ,role) (content . ,content)) messages)))))
+    (nreverse messages)))
 
 (defun ellm--org-plain-text (org-element)
   "Get the plain text content of the given `ORG-ELEMENT'."
@@ -982,7 +1022,7 @@ unless `FILEPATH' is non-nil in which case that file is used."
   "Mark the current conversation in the `ellm--conversations-file'."
   (interactive)
   (save-excursion
-    (ellm--goto-conversation-top-new)
+    (ellm--goto-conversation-top)
     (let ((html-file (org-html-export-to-html nil 'subtree)))
       (browse-url html-file))))
 
@@ -1092,12 +1132,6 @@ Will call `json-encode' on `DATA' if
     (ellm--log org-string
                "MESSAGES-FOR-ORG-MODE" t)))
 
-(defun ellm--log-escaped-org-messages (org-string)
-  "Log `ORG-STRING'."
-  (when ellm--debug-mode
-    (ellm--log org-string
-               "ESCAPED-MESSAGES-FOR-ORG-MODE" t)))
-
 (defun ellm--org-rate-response (rating)
   "Rate the current org headline with a RATING."
   (interactive "sRate the conversation (1-5): ")
@@ -1119,22 +1153,18 @@ Will call `json-encode' on `DATA' if
   (save-excursion
     (goto-char (point-min))
     (while (re-search-forward "^\\* " nil t)
-      (let ((rating (org-entry-get (point) "RATING")))
-        (when rating
-          (let ((face (pcase (string-to-number rating)
-                        (5 '(:foreground "gold"))
-                        (4 '(:foreground "green"))
-                        (3 '(:foreground "yellow"))
-                        (2 '(:foreground "orange"))
-                        (1 '(:foreground "red"))
-                        (_ nil))))
-            (when face
-              (let ((title-begin (line-beginning-position))
-                    (title-end (re-search-forward "  " nil t)))
-                (remove-overlays title-begin title-end 'ellm-rating t)
-                (let ((ov (make-overlay title-begin title-end)))
-                  (overlay-put ov 'ellm-rating t)
-                  (overlay-put ov 'face face))))))))))
+      (when-let ((rating (org-entry-get (point) "RATING")))
+        (let ((face (pcase (string-to-number rating)
+                      ((pred (lambda (r) (assoc r ellm-org--faces-alist)))
+                       (cdr (assoc (string-to-number rating) ellm-org--faces-alist)))
+                      (_ nil))))
+          (when face
+            (let ((title-begin (line-beginning-position))
+                  (title-end (re-search-forward "  " nil t)))
+              (remove-overlays title-begin title-end 'ellm-rating t)
+              (let ((ov (make-overlay title-begin title-end)))
+                (overlay-put ov 'ellm-rating t)
+                (overlay-put ov 'face face)))))))))
 
 (defun ellm-org-rate-response-and-refresh (rating)
   "Rate the current org headline with a RATING and apply the corresponding face."
@@ -1190,7 +1220,7 @@ If `VARIABLEP' is non-nil, treat the symbol as a variable."
       (json-pretty-print-buffer)
       (display-buffer (current-buffer)))))
 
-(defun ellm--extract-and-save-definitions-in-json (filename)
+(defun ellm-extract-and-save-definitions-in-json (filename)
   "Extract and save all definitions in the current buffer to `FILENAME'.
 
 Note that `FILENAME' should be an absolute path to the file."
@@ -1224,7 +1254,10 @@ Note that `FILENAME' should be an absolute path to the file."
             (define-key map (kbd "C-c ; ;") #'ellm-show-conversations-buffer)
             (define-key map (kbd "C-c ; s") #'ellm-toggle-save-conversations)
             (define-key map (kbd "C-c ; o") #'ellm-fold-conversations-buffer)
-            map))
+            map)
+  ;; (dolist (rating '(1 2 3 4 5))
+  ;;   (eval `(ellm-org--define-rating-face ,rating)))
+  )
 
 ;;;###autoload
 (define-globalized-minor-mode global-ellm-mode ellm-mode
