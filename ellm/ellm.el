@@ -206,6 +206,9 @@ This message will be prepended to the first user prompt of a conversation.
 See `ellm--add-context-from-region' for usage details.")
 
 (defvar ellm-auto-export nil
+  "If non-nil, the chat is automatically exported when the response is received.")
+
+(defvar ellm--is-external nil
   "If non-nil, the chat is being conducted in an external chat buffer.")
 
 (defvar ellm--last-conversation-exported-id nil
@@ -455,7 +458,8 @@ When togling off, restore the previously set values."
     (org-mode . "org")
     (lua-mode . "lua")
     (c-or-c++-mode . "cpp")
-    (c-or-c++-ts-mode . "cpp"))
+    (c-or-c++-ts-mode . "cpp")
+    (rjsx-mode . "js"))
   "Alist mapping major modes to Org mode source block languages.")
 
 (defun ellm--add-context-from-region (prompt)
@@ -845,7 +849,7 @@ where [HC] is `HEADLINE-CHAR' or \"#\" by default."
 
 (defun ellm--markdown-to-org-sync (markdown-string)
   "Convert `MARKDOWN-STRING' from Markdown to Org using Pandoc."
-  (let* ((pandoc-command "pandoc -f markdown -t org --shift-heading-level-by=0")
+  (let* ((pandoc-command "pandoc -f markdown -t org --shift-heading-level-by=1")
          (org-string
           (with-temp-buffer
             (insert markdown-string)
@@ -965,15 +969,22 @@ Optionally, the content of that message can be passed as the `PROMPT' argument."
   (let ((id (org-entry-get (point) "ID" t)))
     (ellm--resume-conversation id prompt)))
 
-(defun ellm-chat-external (prompt &optional id)
-  "Entry point for making a `PROMPT' via `emacsclient'.
+(defun ellm-chat-external (selection &optional id)
+  "Entry point for making a prompt via `emacsclient'.
 
-The content of the next (or first) user message is passed
-as the `PROMPT' argument. Optionally, the `ID' of a previous
+The context of the next (or first) user message is passed
+as the `SELECTION' argument. Optionally, the `ID' of a previous
 conversation can be specified to continue that conversation."
   (setq ellm-auto-export t)
-  (if id (ellm--resume-conversation id prompt)
-    (ellm-chat nil prompt)))
+  (with-temp-buffer
+    (when selection
+      (insert selection)
+      (goto-char (point-min))
+      (set-mark (point))
+      (goto-char (point-max)))
+    (if id
+        (ellm--resume-conversation id)
+      (ellm-chat))))
 
 (defun ellm--display-conversations-buffer ()
   "Prepare the conversations buffer for viewing.
@@ -1239,11 +1250,23 @@ Note that `FILENAME' should be an absolute path to the file."
       (newline)))
   nil)
 
+(defun ellm--server-running-p ()
+  "Return non-nil if the ellm server is running."
+  (not (string= "" (shell-command-to-string "lsof -i :5040"))))
+
+(defun ellm-start-server ()
+  "Start the ellm server."
+  (interactive)
+  (unless (ellm--server-running-p)
+    (let ((default-directory "~/projects/emacs/ellm")
+          (openai-api-key (funcall ellm-get-openai-api-key)))
+      (setenv "OPENAI_API_KEY" openai-api-key)
+      (start-process "ellm-server" "*ellm-server*" "node" "server/server.js"))))
+
 ;;;###autoload
 (define-minor-mode ellm-mode
   "Minor mode for interacting with LLMs."
   :group 'ellm
-  :global t
   :keymap (let ((map (make-sparse-keymap)))
             (define-key map (kbd "C-c ; N") #'ellm-chat-at-point)
             (define-key map (kbd "C-c ; n") #'ellm-chat)
@@ -1255,9 +1278,9 @@ Note that `FILENAME' should be an absolute path to the file."
             (define-key map (kbd "C-c ; s") #'ellm-toggle-save-conversations)
             (define-key map (kbd "C-c ; o") #'ellm-fold-conversations-buffer)
             map)
-  ;; (dolist (rating '(1 2 3 4 5))
-  ;;   (eval `(ellm-org--define-rating-face ,rating)))
-  )
+  :global true
+  (if ellm-mode
+      (ellm-start-server)))
 
 ;;;###autoload
 (define-globalized-minor-mode global-ellm-mode ellm-mode
