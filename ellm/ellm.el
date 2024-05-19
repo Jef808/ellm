@@ -166,10 +166,7 @@
     (rating-4 '(:foreground "green"))
     (rating-3 '(:foreground "yellow"))
     (rating-2 '(:foreground "orange"))
-    (rating-1 '(:foreground "red"))
-    (message-title-user '(:foreground "green3"))
-    (message-title-assistant '(:foreground "blue"))
-    (message-title-system '(:foreground "purple")))
+    (rating-1 '(:foreground "red")))
   "Face for the ellm-org mode.")
 
 (defcustom ellm-system-message "You are a useful emacs-integrated general assistant.
@@ -646,7 +643,7 @@ When `CONVERSATION-FILEPATH' is non-nil,the conversation is saved to that file."
       (ellm--log-request-headers request-headers)
       (ellm--log-request-body request-body)
       (url-retrieve url #'ellm--handle-response (list filepath conversation))
-      (message "...Sending request to %s..." (symbol-name (ellm--get-model-provider conversation)))
+      (message "...Waiting for response from %s..." (symbol-name (ellm--get-model-provider conversation)))
   nil))
 
 (defun ellm--handle-response (status conversation-filepath conversation)
@@ -721,8 +718,6 @@ The `RESPONSE' is expected to be a string."
     (ellm--log-org-messages messages-to-insert)
     (with-current-buffer buffer
       (delay-mode-hooks (org-mode))
-      (when (fboundp '+popup/close)
-        (local-set-key (kbd "q") '+popup/close))
       (read-only-mode -1)
       (if-let ((pos (and ellm-save-conversations (org-id-find id 'marker))))
           (progn (goto-char pos)
@@ -731,15 +726,15 @@ The `RESPONSE' is expected to be a string."
       (goto-char (point-min))
       (ellm--insert-heading-and-metadata title id model temperature)
       (insert messages-to-insert)
+      (read-only-mode +1)
       (when ellm-save-conversations
         (save-buffer))
-      (read-only-mode +1)
       (ellm--display-conversations-buffer)
       (when ellm-auto-export
         (ellm-export-conversation)))))
 
 (defun ellm--insert-heading-and-metadata (title id model temperature)
-  "Insert an Org heading with properties TITLE, ID, MODEL, and TEMPERATURE."
+  "Insert an Org heading with properties `TITLE', `ID', `MODEL', and `TEMPERATURE'."
   (org-insert-heading)
   (insert title "  ")
   (org-insert-time-stamp nil t t)
@@ -841,10 +836,9 @@ is converted to the string
      content\"
 
 where [HC] is `HEADLINE-CHAR' or \"#\" by default."
-  (let ((role
-         (capitalize (substring (symbol-name (alist-get 'role message)) 1)))
-        (content (alist-get 'content message))
-        (hc (or headline-char "#")))
+  (let* ((role (capitalize (substring (symbol-name (alist-get 'role message)) 1)))
+         (content (alist-get 'content message))
+         (hc (or headline-char "#")))
     (format "%s %s\n\n%s" hc role content)))
 
 (defun ellm--markdown-to-org-sync (markdown-string)
@@ -906,7 +900,7 @@ conversation's title."
         (temperature (string-to-number (org-element-property :TEMPERATURE subtree))))
     `((id . ,id) (model . ,model) (temperature . ,temperature))))
 
-(defun ellm-org--headling-message-p (hl)
+(defun ellm-org--headline-message-p (hl)
   "Return non-nil if the headline `HL' is a message."
   (and (= (org-element-property :level hl) 2)
        (member (org-element-property :raw-value hl)
@@ -925,16 +919,18 @@ When `INVISIBLE-OK' is non-nil, extract messages even if they are folded."
   (let (messages)
     (org-element-map subtree 'headline
       (lambda (hl)
-        (when (and (ellm-org--headling-message-p hl)
+        (when (and (ellm-org--headline-message-p hl)
                    (or invisible-ok (ellm-org--message-visible-p hl)))
-          (let ((role
+          (let* ((role
                  (pcase (org-element-property :raw-value hl)
                    ("User" :user)
                    ("Assistant" :assistant)
                    ("System" :system)))
                 (content
                  (ellm--org-plain-text
-                  (cdr (org-element-contents (car (org-element-contents hl)))))))
+                  ;; (nthcdr 2 (org-element-contents
+                  (if (eq role :user) (cdr (org-element-contents hl))
+                    (cdr (org-element-contents (car (org-element-contents hl))))))))
             (push `((role . ,role) (content . ,content)) messages)))))
     (nreverse messages)))
 
