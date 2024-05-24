@@ -203,3 +203,6 @@ server/.webpack/
 server/.svelte-kit
 
 # End of https://www.toptal.com/developers/gitignore/api/node
+**/.notes.org
+**/node_modules/
+**/package-lock.json
