@@ -94,7 +94,7 @@
           (const :tag "Small" small))
   :group 'ellm)
 
-(defcustom ellm-model "gpt-4-turbo-preview"
+(defcustom ellm-model "gpt-4o"
   "The model to use when making a prompt."
   :type 'string
   :group 'ellm)
@@ -109,7 +109,7 @@
   :type 'integer
   :group 'ellm)
 
-(defcustom ellm--openai-models-alist `((big . "gpt-4-turbo-preview")
+(defcustom ellm--openai-models-alist `((big . "gpt-4o")
                                        (medium . "gpt-3.5-turbo")
                                        (small . "gpt-3.5-turbo"))
   "Alist mapping model sizes to OpenAI model names."
@@ -131,7 +131,7 @@
   :type 'alist
   :group 'ellm)
 
-(defcustom ellm-model-alist `(("gpt-4-turbo-preview" . (:provider openai :size big))
+(defcustom ellm-model-alist `(("gpt-4o" . (:provider openai :size big))
                               ("gpt-3.5-turbo" . (:provider openai :size small))
                               ("claude-3-opus-20240229" . (:provider anthropic :size big))
                               ("claude-3-sonnet-20240229" . (:provider anthropic :size medium))
@@ -293,7 +293,7 @@ See `ellm--add-context-from-region' for usage details.")
 
 (defun ellm--validation-temperature (temperature)
   "Validate the `TEMPERATURE' value."
-  (and (numberp temperature) (>= temperature 0) (<= temperature 2)))
+  (and (numberp temperature) (>= temperature 0.0) (<= temperature 2.0)))
 
 (defun ellm-set-temperature (&optional temperature)
   "Set the `TEMPERATURE' to use for the LLM prompt."
@@ -305,7 +305,7 @@ See `ellm--add-context-from-region' for usage details.")
        (message "Error: Invalid temperature value: %s" temp))
      (and (setq ellm-temperature temp)
            (message "...temperature set to %s..." ellm-temperature)))
-   (if (ellm--validation-max-tokens temperature)
+   (if (ellm--validation-temperature temperature)
        (setq ellm-temperature temperature)
      (error "Invalid argument: `%s' should be number between 0 and 2" temperature))))
 
@@ -851,22 +851,26 @@ where [HC] is `HEADLINE-CHAR' or \"#\" by default."
             (buffer-string))))
     org-string))
 
-(defun ellm--resume-conversation (id &optional prompt)
+(defun ellm--resume-conversation (&optional id prompt)
   "Resume a previous conversation with given `ID'.
 
 Optionally, the `PROMPT' for the next user message can be passed as
 an argument.
+When `ID' is nil, it is assumed that the current point is within a conversation
+in the `ellm--temp-conversations-buffer-name' buffer.
 When `ellm-save-conversations' is non-nil, the conversation
 at point will be removed from the org document and the updated conversation
 will be inserted at the top of the document."
-  (when-let* ((pos (org-id-find id 'marker))
-              (conversation (save-excursion (goto-char pos) (ellm--parse-conversation))))
-    (let ((filepath (buffer-file-name (current-buffer))))
-      (setf (alist-get 'system conversation) (concat ellm-system-message ellm--system-message-suffix)
-            (alist-get 'max_tokens conversation) ellm-max-tokens
-            (alist-get 'temperature conversation) ellm-temperature)
-      (ellm--set-model (alist-get 'model conversation))
-      (ellm-chat conversation filepath prompt))))
+  (let* ((pos (if id (org-id-find id 'marker)
+                (save-excursion (ellm--goto-conversation-top) (point))))
+         (conversation (ellm--parse-conversation pos))
+         (filepath (unless (ellm--at-temp-conversations-buffer-p)
+                     (buffer-file-name (current-buffer)))))
+    (ellm--set-model (alist-get 'model conversation))
+    (ellm-set-temperature (alist-get 'temperature conversation))
+    (setf (alist-get 'system conversation) (concat ellm-system-message ellm--system-message-suffix)
+          (alist-get 'max_tokens conversation) ellm-max-tokens)
+    (ellm-chat conversation filepath prompt)))
 
 (defun ellm--conversation-subtree ()
   "Return the current conversation subtree."
@@ -875,64 +879,64 @@ will be inserted at the top of the document."
       (org-narrow-to-subtree)
       (car (org-element-contents (org-element-parse-buffer))))))
 
-(defun ellm--parse-conversation ()
-  "Parse the current org subtree into a conversation object.
-
-It is assumed that the point is located at the beginning of a
-conversation's title."
-  (let* (result
-         (subtree (ellm--conversation-subtree))
-         (title (org-element-property :raw-value subtree))
+(defun ellm--parse-conversation (&optional posn)
+  "Parse the org subtree starting at `POSN' into a conversation object."
+  (let* (conversation
+         (properties (org-entry-properties posn))
+         (metadata (ellm-org--get-conversation-metadata properties));; (subtree (ellm--conversation-subtree))
+         (title (alist-get "ITEM" properties nil nil 'equal))
          (effective-title (when (string-match org-element--timestamp-regexp title)
                             (s-trim (substring title 0 (match-beginning 0)))))
-         (metadata (ellm-org--metadata-from-subtree subtree))
-         (messages (ellm-org--messages-from-subtree subtree)))
-      (setq result metadata)
-      (push (cons 'title effective-title) result)
-      (push (cons 'messages messages) result)
-      (push (cons 'system (concat ellm-system-message ellm--system-message-suffix)) result)
-      result))
+         (messages (ellm-org--get-conversation-messages posn)))
+      (setq conversation metadata)
+      (push (cons 'title effective-title) conversation)
+      (push (cons 'messages messages) conversation)
+      (push (cons 'system (concat ellm-system-message ellm--system-message-suffix)) conversation)
+      conversation))
 
-(defun ellm-org--metadata-from-subtree (subtree)
-  "Extract metadata from an org `SUBTREE' conversation."
-  (let ((id (org-element-property :ID subtree))
-        (model (org-element-property :MODEL subtree))
-        (temperature (string-to-number (org-element-property :TEMPERATURE subtree))))
+(defun ellm-org--get-conversation-metadata (properties)
+  "Extract metadata from the org `PROPERTIES' alist."
+  (let ((id (alist-get "ID" properties nil nil 'equal))
+        (model (alist-get "MODEL" properties nil nil 'equal))
+        (temperature (string-to-number (alist-get "TEMPERATURE" properties nil nil 'equal) 10)))
     `((id . ,id) (model . ,model) (temperature . ,temperature))))
 
-(defun ellm-org--headline-message-p (hl)
-  "Return non-nil if the headline `HL' is a message."
-  (and (= (org-element-property :level hl) 2)
-       (member (org-element-property :raw-value hl)
-               '("User" "Assistant" "System"))))
-
-(defun ellm-org--message-visible-p (hl)
-  "Return non-nil if the message `HL' is visible."
-  (let ((beg (org-element-property :contents-begin hl)))
-    (null (get-char-property beg 'invisible))))
-
-(defun ellm-org--messages-from-subtree (subtree &optional invisible-ok)
-  "Extract the messages from an org `SUBTREE' conversation.
-
-When `INVISIBLE-OK' is non-nil, extract messages even if they are folded."
-  (interactive)
+(defun ellm-org--get-conversation-messages (posn)
+  "Reconstruct the messages from the conversation at `POSN'."
   (let (messages)
-    (org-element-map subtree 'headline
-      (lambda (hl)
-        (when (and (ellm-org--headline-message-p hl)
-                   (or invisible-ok (ellm-org--message-visible-p hl)))
-          (let* ((role
-                 (pcase (org-element-property :raw-value hl)
-                   ("User" :user)
-                   ("Assistant" :assistant)
-                   ("System" :system)))
-                (content
-                 (ellm--org-plain-text
-                  ;; (nthcdr 2 (org-element-contents
-                  (if (eq role :user) (cdr (org-element-contents hl))
-                    (cdr (org-element-contents (car (org-element-contents hl))))))))
-            (push `((role . ,role) (content . ,content)) messages)))))
+    (save-excursion
+      (goto-char posn)
+      (unless (ellm-org--at-headline-level-p 1)
+        (error "ellm-org--reconstruct-messages: Point should be at the beginning of a conversation"))
+      (org-down-element)
+      (unless (ellm-org--at-headline-level-p 2)
+        (org-next-visible-heading 1))
+      (when (ellm-org--at-headline-level-p 2)
+        (push (ellm-org--message-at-point) messages))
+      (while (org-get-next-sibling)
+        (push (ellm-org--message-at-point) messages)))
     (nreverse messages)))
+
+(defun ellm-org--message-at-point ()
+  "Captures the current message as a string.
+It is assumed that the point is located at the beginning of a message."
+  (let ((role (intern (concat ":" (downcase (org-element-property
+                                             :raw-value
+                                             (org-element-at-point-no-context))))))
+        (content
+         (save-excursion
+           (save-restriction
+             (org-narrow-to-subtree)
+             (org-down-element)
+             (when (org-at-property-drawer-p)
+               (org-forward-element))
+             (buffer-substring-no-properties (point) (point-max))))))
+    `((role . ,role) (content . ,(s-trim content)))))
+
+(defun ellm-org--at-headline-level-p (level)
+  "Check if the point is at a headline of the given `LEVEL'."
+  (and (org-at-heading-p)
+       (= (org-element-property :level (org-element-at-point-no-context)) level)))
 
 (defun ellm--org-plain-text (org-element)
   "Get the plain text content of the given `ORG-ELEMENT'."
@@ -949,8 +953,12 @@ When `INVISIBLE-OK' is non-nil, extract messages even if they are folded."
                    ellm--conversations-dir)
         (string-prefix-p ellm--conversations-filename-prefix
                          (f-filename (buffer-file-name (current-buffer)))))
-       (equal (buffer-name) ellm--temp-conversations-buffer-name))
+       (ellm--at-temp-conversations-buffer-p))
    (not (org-before-first-heading-p))))
+
+(defun ellm--at-temp-conversations-buffer-p ()
+  "Check if the current buffer is `ellm--temp-conversations-buffer-name'."
+  (equal (buffer-name) ellm--temp-conversations-buffer-name))
 
 (defun ellm-chat-at-point (&optional prompt)
   "Resume the conversation at point.
@@ -962,7 +970,9 @@ Optionally, the content of that message can be passed as the `PROMPT' argument."
   (interactive)
   (unless (ellm--point-at-conversation-p)
     (user-error "Point is not within a conversation"))
-  (let ((id (org-entry-get (point) "ID" t)))
+  (let ((id
+         (unless (ellm--at-temp-conversations-buffer-p)
+           (org-entry-get (point) "ID" t))))
     (ellm--resume-conversation id prompt)))
 
 (defun ellm-chat-external (selection &optional id)
