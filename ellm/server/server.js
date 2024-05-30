@@ -49,6 +49,28 @@ app.post('/script', async (req, res) => {
   }
 });
 
+app.post('/snippet', async (req, res) => {
+  try {
+    const query = req.body.data;
+    console.log("Received query", query);
+
+    const response = await openai.chat.completions.create({
+      messages: [
+        { role: 'system', content: 'You are an expert programmer. Your task is to write a snippet of code implementing the user query, nothing else' },
+        { role: 'user', content: `${query}\n\n\`\`\`python\n` }
+      ],
+      stop_words: ['```\n'],
+      model: 'gpt-4o',
+      max_tokens: 1024,
+    })
+    await console.log("Script generated:", response.choices[0].message.content)
+    await res.send(response)
+  } catch (error) {
+    console.error(error);
+    res.status(500).send(`An error has occured: ${error}`)
+  }
+});
+
 app.post('/question', async (req, res) => {
   try {
     const question = req.body.data;
