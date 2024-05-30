@@ -35,6 +35,11 @@
   :group 'tools
   :prefix "ellm-")
 
+(defcustom ellm-server-port 5040
+  "The port to use for the webserver."
+  :type 'integer
+  :group 'ellm)
+
 (defcustom ellm-get-openai-api-key
   #'ellm--get-openai-api-key-from-env
   "A function which retrieves your OpenAI API key."
@@ -174,7 +179,9 @@ Your goal is to execute the user's task or precisely answer their questions, usi
 the CONTEXT the user provides (if any).
 You are very cautious and give thorough justifications for each claim that you make.
 When you are not very confident about certain details, you say so and, if it can help, \
-ask the user for clarifications needed for those details."
+ask the user for clarifications needed for those details.
+You avoid unnecessary politeness formulae and organizational sections. \
+You instead focus on examples and the technical aspects of the subject at hand."
   "The system message to set the stage for new conversations."
   :type 'string
   :group 'ellm)
@@ -190,10 +197,7 @@ Your title here
 --------------------------------------------
 
 Your response here.
-
-In your response, you tend to avoid unnecessary politeness formulae and purely
-organizational sections. You instead focus on examples and the technical aspects
-of the subject at hand."
+Format your response in markdown."
   "The system message suffix to append to the system message.")
 
 (defvar ellm-prompt-context-fmt-string
@@ -456,7 +460,8 @@ When togling off, restore the previously set values."
     (lua-mode . "lua")
     (c-or-c++-mode . "cpp")
     (c-or-c++-ts-mode . "cpp")
-    (rjsx-mode . "js"))
+    (rjsx-mode . "js")
+    (sh-mode . "shell"))
   "Alist mapping major modes to Org mode source block languages.")
 
 (defun ellm--add-context-from-region (prompt)
@@ -594,9 +599,18 @@ The `GET-API-KEY' function is used to retrieve the api key for anthropic."
 (defun ellm--prepare-request-body (conversation)
   "Prepare the API call body to send `CONVERSATION'."
   (let* ((provider (ellm--get-model-provider conversation))
-         (config (alist-get provider ellm-provider-configurations))
-         (prepare-fn (alist-get 'prepare-request-body config)))
-    (funcall prepare-fn conversation)))
+         (config (alist-get provider ellm-provider-configurations)))
+    (funcall (alist-get 'prepare-request-body config) conversation)))
+    ;;      (prepare-fn (alist-get 'prepare-request-body config)))
+    ;; (funcall prepare-fn conversation)))
+
+(defun ellm--get-route-target (conversation)
+  "Get the endpoint to send the request to based on `CONVERSATION'."
+  (let* ((provider (ellm--get-model-provider conversation))
+         (config (alist-get provider ellm-provider-configurations)))
+    (or (alist-get 'route-target config)
+        (error "ellm--get-route-target: Unknown provider or missing route target: %s"
+               (symbol-name provider)))))
 
 (defun ellm--get-url (conversation)
   "Get the URL to send the request to based on `CONVERSATION'."
@@ -633,8 +647,8 @@ When `CONVERSATION-FILEPATH' is non-nil,the conversation is saved to that file."
          (conversation (or
                         (and current-conversation
                              (ellm--add-user-message prompt current-conversation))
-                           (ellm--initialize-conversation prompt)))
-         (url (ellm--get-url conversation))
+                        (ellm--initialize-conversation prompt)))
+         (url (ellm--get-url conversation));; (concat "http://localhost:5040" (number-to-string ellm-server-port)))
          (request-headers (ellm--prepare-request-headers conversation))
          (request-body (ellm--prepare-request-body conversation))
          (url-request-method "POST")
@@ -843,7 +857,7 @@ where [HC] is `HEADLINE-CHAR' or \"#\" by default."
 
 (defun ellm--markdown-to-org-sync (markdown-string)
   "Convert `MARKDOWN-STRING' from Markdown to Org using Pandoc."
-  (let* ((pandoc-command "pandoc -f markdown -t org --shift-heading-level-by=1")
+  (let* ((pandoc-command "pandoc -f markdown+tex_math_single_backslash -t org --shift-heading-level-by=1")
          (org-string
           (with-temp-buffer
             (insert markdown-string)
@@ -982,15 +996,14 @@ The context of the next (or first) user message is passed
 as the `SELECTION' argument. Optionally, the `ID' of a previous
 conversation can be specified to continue that conversation."
   (setq ellm-auto-export t)
-  (with-temp-buffer
     (when selection
-      (insert selection)
-      (goto-char (point-min))
-      (set-mark (point))
-      (goto-char (point-max)))
-    (if id
-        (ellm--resume-conversation id)
-      (ellm-chat))))
+      (with-temp-buffer
+        (goto-char (point-min))
+        (set-mark (point))
+        (insert selection)
+        (if id
+            (ellm--resume-conversation id)
+          (ellm-chat)))))
 
 (defun ellm--display-conversations-buffer ()
   "Prepare the conversations buffer for viewing.
