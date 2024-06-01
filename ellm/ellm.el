@@ -58,6 +58,12 @@
   :type 'function
   :group 'ellm)
 
+(defcustom ellm-get-mistral-api-key
+  #'ellm--get-mistral-api-key-from-env
+  "A function which retrieves your Mistral API key."
+  :type 'function
+  :group 'ellm)
+
 (defconst ellm--openai-api-url "https://api.openai.com/v1/chat/completions"
   "The URL to send requests to the OpenAI API.")
 
@@ -66,6 +72,9 @@
 
 (defconst ellm--groq-api-url "https://api.groq.com/openai/v1/chat/completions"
   "The URL to send requests to the Groq API.")
+
+(defconst ellm--mistral-api-url "https://codestral.mistral.ai/v1/chat/completions"
+  "The URL to send requests to the Mistral API.")
 
 (defcustom ellm--temp-conversations-buffer-name "*LLM Conversations*"
   "The file to store conversation history."
@@ -88,7 +97,8 @@
   :type '(choice
           (const :tag "OpenAI" openai)
           (const :tag "Anthropic" anthropic)
-          (const :tag "Groq" groq))
+          (const :tag "Groq" groq)
+          (const :tag "Mistral" mistral))
   :group 'ellm)
 
 (defcustom ellm-model-size 'big
@@ -136,6 +146,13 @@
   :type 'alist
   :group 'ellm)
 
+(defcustom ellm--mistral-models-alist `((big . "codestral-latest")
+                                        (medium . "mistral-large-latest")
+                                        (small . "mistral-small-latest"))
+  "Alist mapping model sizes to OpenAI model names."
+  :type 'alist
+  :group 'ellm)
+
 (defcustom ellm-model-alist `(("gpt-4o" . (:provider openai :size big))
                               ("gpt-3.5-turbo" . (:provider openai :size small))
                               ("claude-3-opus-20240229" . (:provider anthropic :size big))
@@ -143,10 +160,16 @@
                               ("claude-3-haiku-20240307" . (:provider anthropic :size small))
                               ("llama3-70b-8192" . (:provider groq :size big))
                               ("llama3-8b-8292" . (:provider groq :size medium))
-                              ("mixtral-8x7b-32768" . (:provider groq :size small)))
+                              ("mixtral-8x7b-32768" . (:provider groq :size small))
+                              ("codestral-latest" . (:provider mistral :size big))
+                              ("mistral-large-latest" . (:provider mistral :size medium))
+                              ("mistral-small-latest" . (:provider mistral :size small)))
   "Alist mapping model names to their providers."
   :type 'alist
   :group 'ellm)
+
+(defvar ellm--providers-supported '(anthropic openai groq mistral)
+  "List of supported providers.")
 
 (defcustom ellm-save-conversations t
   "If non-nil, save the conversation history to `ellm--conversations-file'."
@@ -236,7 +259,13 @@ See `ellm--add-context-from-region' for usage details.")
              (prepare-request-headers . ellm--prepare-request-headers-default)
              (prepare-request-body . ellm--prepare-request-body-default)
              (parse-response . ellm--parse-response-openai)
-             (models-alist . ,ellm--groq-models-alist))))
+             (models-alist . ,ellm--groq-models-alist)))
+    (mistral . ((base-url . ,ellm--mistral-api-url)
+                (get-api-key . ,(lambda () (funcall ellm-get-mistral-api-key)))
+                (prepare-request-headers . ellm--prepare-request-headers-default)
+                (prepare-request-body . ellm--prepare-request-body-default)
+                (parse-response . ellm--parse-response-openai)
+                (models-alist . ,ellm--mistral-models-alist))))
   "Alist mapping providers to their API configurations.")
 
 (defun ellm--get-provider-configuration (provider)
@@ -255,11 +284,15 @@ See `ellm--add-context-from-region' for usage details.")
   "Get the Groq API key from the environment."
   (getenv "GROQ_API_KEY"))
 
+(defun ellm--get-mistral-api-key-from-env ()
+  "Get the Mistral API key from the environment."
+  (getenv "MISTRAL_API_KEY"))
+
 (defun ellm-set-provider (&optional provider)
   "Set the API `PROVIDER' to use."
   (interactive)
   (let* ((p (or provider
-                (intern (completing-read "Choose provider: " '(anthropic openai groq)))))
+                (intern (completing-read "Choose provider: " ellm--providers-supported))))
          (config (ellm--get-provider-configuration p))
          (models-alist (alist-get 'models-alist config)))
     (setq ellm-model (alist-get ellm-model-size models-alist)
@@ -634,10 +667,52 @@ The `GET-API-KEY' function is used to retrieve the api key for anthropic."
 (defun ellm-chat (&optional current-conversation conversation-filepath next-prompt)
   "Send a request to the current provider's chat completion endpoint.
 
-Unless `NEXT-PROMPT' is non-nil, the next prompt is read interactively
-from the minibuffer. When `CURRENT-CONVERSATION' is a valid conversation object,
-that conversation is continued with the next prompt and associated response.
-When `CONVERSATION-FILEPATH' is non-nil,the conversation is saved to that file."
+This function serves as the main entry point for interacting with the `ellm`
+package, which facilitates chat-based communication with a specified model
+provider.
+
+Arguments:
+- `CURRENT-CONVERSATION` (optional): A conversation object representing the
+ongoing
+ conversation. If provided, the conversation will be continued with the next
+prompt
+ and the associated response. If nil, a new conversation will be initialized.
+- `CONVERSATION-FILEPATH` (optional): A string representing the file path where
+the conversation should be saved. If nil, the conversation will be saved to a
+default location determined by the `ellm--get-conversation-file-path` function.
+- `NEXT-PROMPT` (optional): A string representing the next prompt to be sent to
+the model provider. If nil, the prompt will be read interactively from the
+minibuffer.
+
+Behavior:
+1. The function determines the prompt message based on whether
+`CURRENT-CONVERSATION` is provided.
+2. It reads the prompt either from `NEXT-PROMPT` or interactively from the
+minibuffer.
+3. It determines the file path for saving the conversation using
+`CONVERSATION-FILEPATH` or a default method.
+4. It updates the conversation object by adding the user's message if
+`CURRENT-CONVERSATION` is provided,
+   or initializes a new conversation if not.
+5. It constructs the URL for the request using the conversation object.
+6. It prepares the request headers and body based on the conversation object.
+7. It sets the HTTP method to \"POST\" and configures the request with the
+prepared headers and body.
+8. It logs the request details for debugging purposes.
+9. It sends the request to the model provider's endpoint and specifies
+`ellm--handle-response` as the callback
+   function to handle the response.
+10. It displays a message indicating that it is waiting for a response from the
+model provider.
+
+Returns:
+- Always returns nil.
+
+Example usage:
+  (ellm-chat)
+  (ellm-chat my-conversation)
+  (ellm-chat nil nil \"What is the weather today?\")
+  (ellm-chat my-conversation \"/path/to/save/conversation\" \"Tell me a joke.\")"
   (interactive)
   (let* ((prompt-message (if current-conversation
                              "Enter your next prompt: "
@@ -648,14 +723,13 @@ When `CONVERSATION-FILEPATH' is non-nil,the conversation is saved to that file."
                         (and current-conversation
                              (ellm--add-user-message prompt current-conversation))
                         (ellm--initialize-conversation prompt)))
-         (url (ellm--get-url conversation));; (concat "http://localhost:5040" (number-to-string ellm-server-port)))
+         (url (ellm--get-url conversation))
          (request-headers (ellm--prepare-request-headers conversation))
          (request-body (ellm--prepare-request-body conversation))
          (url-request-method "POST")
          (url-request-extra-headers request-headers)
          (url-request-data request-body))
-      (ellm--log-request-headers request-headers)
-      (ellm--log-request-body request-body)
+      (ellm--log-request url request-headers request-body)
       (url-retrieve url #'ellm--handle-response (list filepath conversation))
       (message "...Waiting for response from %s..." (symbol-name (ellm--get-model-provider conversation)))
   nil))
@@ -1053,11 +1127,25 @@ unless `FILEPATH' is non-nil in which case that file is used."
   (interactive)
   (save-excursion
     (ellm--goto-conversation-top)
-    (let ((html-file (org-html-export-to-html nil 'subtree)))
+    (let* ((html-file (org-html-export-to-html nil 'subtree)))
       (browse-url html-file))))
 
 (defun ellm--goto-conversation-top ()
-  "Go to the top of the current conversation in the current buffer."
+    "Go to the top of the current conversation in the current buffer.
+
+This function navigates to the top-level headline (level 1) of the
+current conversation. It first checks if the point is within a
+conversation, and if not, it throws an error. It then uses
+`org-element-lineage' to get all the ancestors of the element at
+point and, if found, moves the point to the first headline of
+level 1 found.
+
+This function is more reliable than using `org-back-to-header' or
+`org-up-heading-safe' to navigate the document structure, as it will
+work even if the headline levels are not singly incremented.
+
+Returns the resulting POINT if the point is moved to the top of the
+conversation, or throws an error otherwise."
   (unless (ellm--point-at-conversation-p)
     (user-error "Point is not within a conversation"))
   (if-let* ((top-headline-p
@@ -1072,12 +1160,48 @@ unless `FILEPATH' is non-nil in which case that file is used."
     (error "No top-level headline found")))
 
 (defun ellm--goto-first-top-level-heading ()
-  "Go to the first top-level heading in the current buffer."
+  "Move the point to the first top-level heading in the current buffer.
+
+This function is specifically designed for Org mode buffers. It starts at the
+beginning of the buffer and then navigates to the first top-level heading.
+
+If the buffer is empty or does not contain any top-level headings, the point
+will remain at the beginning of the buffer.
+
+Note: This function relies on the `org-goto-first-child` function from the
+Org mode library. Ensure that Org mode is properly installed and loaded before
+using this function."
   (goto-char (point-min))
   (org-goto-first-child))
 
 (defun ellm--setup-persistance ()
-  "Register ellm configuration variables with the `savehist' package."
+  "Register ellm configuration variables with the `savehist' package.
+
+This function is responsible for maintaining the persistence of certain
+configuration variables used by the ellm package. It does this by adding
+those variables to the `savehist-additional-variables' list. This ensures
+that the values of these variables are saved and restored across Emacs
+sessions.
+
+The variables that are registered for persistence are:
+
+- `ellm-max-tokens': The maximum number of tokens to generate in the
+  completion.
+- `ellm-model-size': The size of the model to use.
+- `ellm-provider': The provider of the language model.
+- `ellm-temperature': The temperature to use for sampling during completion.
+- `ellm-save-conversations': A boolean value indicating whether to save
+  conversations.
+- `ellm--debug-mode': A boolean value indicating whether to enable debug
+  mode.
+
+Note that this function does not actually save the variables. It only
+registers them with the `savehist' package, which will save them when it
+saves the Emacs session. Similarly, it does not restore the variables.
+The `savehist' package will restore them when it restores the Emacs
+session.
+
+This function does not take any arguments and returns nil."
   (let ((symbols-to-add '(ellm-max-tokens
                           ellm-model-size
                           ellm-provider
@@ -1129,6 +1253,13 @@ Will call `json-encode' on `DATA' if
 (defun ellm--log-no-response-body ()
   "Log that were no response body."
   (ellm--log "No response body (DNS resolve or TCP error)" "REQUEST-ERROR" t))
+
+(defun ellm--log-request (url headers body)
+  "Log the request `URL', `HEADERS', and `BODY'."
+  (when ellm--debug-mode
+    (ellm--log url "REQUEST-URL" t)
+    (ellm--log headers "REQUEST-HEADERS" t)
+    (ellm--log body "REQUEST-BODY")))
 
 (defun ellm--log-request-headers (headers)
   "Log the request `HEADERS'."
