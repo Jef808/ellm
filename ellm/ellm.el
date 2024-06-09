@@ -224,19 +224,51 @@ Format your response in markdown."
   "The system message suffix to append to the system message.")
 
 (defcustom ellm-system-messages
-  `(("default" . "You are a useful emacs-integrated general assistant.
-Your goal is to execute the user's task or precisely answer their questions, using all \
-the CONTEXT the user provides (if any).
-You are very cautious and give thorough justifications for each claim that you make.
-When you are not very confident about certain details, you say so and, if it can help, \
-ask the user for clarifications needed for those details.
-You avoid unnecessary politeness formulae and organizational sections. \
-You instead focus on examples and the technical aspects of the subject at hand."))
-  "Alist mapping system message names to their content."
+  `(("default" . "You are a useful general assistant integrated with Emacs.
+Your goal is to execute the user's task or precisely answer their questions, \
+using all the CONTEXT the user provides (if any).
+Ensure your responses are relevant and adequate based on the nature of the query.
+You are very cautious and give thorough justifications for each claim made.
+When not confident about certain details, you say so.
+If needed, request further information or clarifications from the user.
+Avoid unnecessary politeness and organizational sections.
+Instead, focus on providing clear, relevant examples and the technical aspects \
+of the subject at hand.")
+
+    ("question-and-answer" . "You are an expert technical assistant integrated with Emacs.
+Your primary task is to precisely and succinctly answer the user's technical questions.
+When answering, ensure that your responses are directly relevant to the question asked.
+If needed, request further information or clarifications from the user to provide better support.
+Avoid unnecessary details and focus on accuracy and relevance.")
+
+    ("code-refactoring" . "You are an expert code refactoring assistant integrated with Emacs.
+Your primary task is to assist with improving and optimizing existing code.
+Identify inefficient or outdated code patterns and suggest better alternatives.
+Ensure that the refactored code remains functionally equivalent to the original.
+If there are multiple valid ways to refactor, present the options and recommend the most efficient one.
+Provide clear, concise code samples highlighting the changes.")
+
+    ("code-review" . "You are an expert code review assistant integrated with Emacs.
+Your primary task is to assist with reviewing code, identifying potential issues, and suggesting improvements.
+Focus on code logic, best practices, performance, and readability.
+Provide constructive feedback, indicating both strengths and areas for improvement.
+Ensure your comments are clear, specific, and actionable.
+Feel free to request additional context or clarifications if necessary.")
+
+    ("code-generation" . "You are an expert code assistant integrated with Emacs.
+Your primary task is to assist with code generation, ensuring accuracy and efficiency.
+When generating code, use the provided CONTEXT to tailor your responses to the user's needs.
+Provide well-commented, clean, and efficient code samples.
+If the problem can be solved in multiple ways, briefly state the options and recommend the most efficient one.
+When you encounter incomplete or ambiguous instructions, seek clarifications from the user.
+Maintain a focus on technical precision and completeness without redundant explanations or politeness."))
+  "Alist mapping system message names to their content.
+The content of those messages are the system messages that will be used as
+instructions for the language models in new conversations."
   :type 'alist
   :group 'ellm)
 
-(defvar ellm--current-system-message-index 1
+(defvar ellm--current-system-message "default"
   "The index of the current system message in `ellm-system-messages'.")
 
 (defvar ellm-prompt-context-fmt-string
@@ -284,6 +316,12 @@ See `ellm--add-context-from-region' for usage details.")
                 (models-alist . ,ellm--mistral-models-alist))))
   "Alist mapping providers to their API configurations.")
 
+(defun ellm--get-system-message ()
+  "Get the system message based on `ellm--current-system-message'."
+  (concat
+   (alist-get ellm--current-system-message ellm-system-messages nil nil 'equal)
+   ellm--system-message-suffix))
+
 (defun ellm--get-provider-configuration (provider)
   "Get the configuration for the `PROVIDER'."
   (alist-get provider ellm-provider-configurations))
@@ -304,26 +342,29 @@ See `ellm--add-context-from-region' for usage details.")
   "Get the Mistral API key from the environment."
   (getenv "MISTRAL_API_KEY"))
 
-(defun ellm--alist-find-index (key alist)
-  "Find the index of `KEY' in `ALIST'.
-Return nil if `KEY' is not found."
-  (seq-position alist key))
-
 (defun ellm-set-system-message (&optional system-message)
-  "Set the system message to use for the LLM prompt."
+  "Set the `SYSTEM-MESSAGE' to use for the next prompt."
   (interactive)
   (let ((sm (or system-message
                 (completing-read "Choose system message: "
-                                 (mapcar 'car ellm-system-messages)))))
-    (setq ellm-system-message-index (alist-get sm ellm-system-messages)
-          ellm--current-system-message-index (seq-position ellm-system-messages (cons sm ellm-system-messages)))
+                                 (mapcar
+                                  #'(lambda (cons-message)
+                                      (format
+                                       (propertize (car cons-message) 'face 'font-lock-string-face)))
+                                       ellm-system-messages)))))
+    (setq ellm--current-system-message sm)
     (message "...system message set to %s..." sm)))
 
 (defun ellm-set-provider (&optional provider)
   "Set the API `PROVIDER' to use."
   (interactive)
   (let* ((p (or provider
-                (intern (completing-read "Choose provider: " ellm--providers-supported))))
+                (intern (completing-read
+                         "Choose provider: "
+                         (mapcar #'(lambda (item)
+                                     (format
+                                      (propertize (symbol-name item) 'face 'font-lock-type-face)))
+                                      ellm--providers-supported)))))
          (config (ellm--get-provider-configuration p))
          (models-alist (alist-get 'models-alist config)))
     (setq ellm-model (alist-get ellm-model-size models-alist)
@@ -334,7 +375,12 @@ Return nil if `KEY' is not found."
   "Set the `MODEL-SIZE' to use."
   (interactive)
   (let* ((ms (or model-size
-                 (intern (completing-read "Choose model size: " '(big medium small)))))
+                 (intern (completing-read
+                          "Choose model size: "
+                          (mapcar #'(lambda (item)
+                                      (format
+                                       (propertize (symbol-name item) 'face 'font-lock-type-face)))
+                                  '(big medium small))))))
          (config (ellm--get-provider-configuration ellm-provider))
          (models-alist (alist-get 'models-alist config)))
     (setq ellm-model (alist-get ms models-alist)
@@ -409,9 +455,9 @@ Return nil if `KEY' is not found."
 
 (defun ellm--system-message-description ()
   "Return a string describing the current system message."
-  (format "System Message                 %s"
-          (propertize (nth ellm--current-system-message-index ellm-system-messages)
-                      'face 'font-lock-type-face)))
+  (format "System Message                  %s"
+          (propertize ellm--current-system-message
+                      'face 'font-lock-string-face)))
 
 (defun ellm--provider-description ()
   "Return a string describing the current provider."
@@ -614,7 +660,7 @@ Return the conversation-data alist."
       (max_tokens . ,ellm-max-tokens)
       (model . ,ellm-model)
       (title . nil)
-      (system . ,(concat ellm-system-message ellm--system-message-suffix)))))
+      (system . ,(ellm--get-system-message)))))
 
 (defun ellm--prepare-request-headers (conversation)
   "Prepare the API call body to send `CONVERSATION'."
@@ -994,7 +1040,7 @@ will be inserted at the top of the document."
                      (buffer-file-name (current-buffer)))))
     (ellm--set-model (alist-get 'model conversation))
     (ellm-set-temperature (alist-get 'temperature conversation))
-    (setf (alist-get 'system conversation) (concat ellm-system-message ellm--system-message-suffix)
+    (setf (alist-get 'system conversation) (ellm--get-system-message)
           (alist-get 'max_tokens conversation) ellm-max-tokens)
     (ellm-chat conversation filepath prompt)))
 
@@ -1017,7 +1063,7 @@ will be inserted at the top of the document."
       (setq conversation metadata)
       (push (cons 'title effective-title) conversation)
       (push (cons 'messages messages) conversation)
-      (push (cons 'system (concat ellm-system-message ellm--system-message-suffix)) conversation)
+      (push (cons 'system (ellm--get-system-message)) conversation)
       conversation))
 
 (defun ellm-org--get-conversation-metadata (properties)
