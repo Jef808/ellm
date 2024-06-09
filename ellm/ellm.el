@@ -223,6 +223,22 @@ Your response here.
 Format your response in markdown."
   "The system message suffix to append to the system message.")
 
+(defcustom ellm-system-messages
+  `(("default" . "You are a useful emacs-integrated general assistant.
+Your goal is to execute the user's task or precisely answer their questions, using all \
+the CONTEXT the user provides (if any).
+You are very cautious and give thorough justifications for each claim that you make.
+When you are not very confident about certain details, you say so and, if it can help, \
+ask the user for clarifications needed for those details.
+You avoid unnecessary politeness formulae and organizational sections. \
+You instead focus on examples and the technical aspects of the subject at hand."))
+  "Alist mapping system message names to their content."
+  :type 'alist
+  :group 'ellm)
+
+(defvar ellm--current-system-message-index 1
+  "The index of the current system message in `ellm-system-messages'.")
+
 (defvar ellm-prompt-context-fmt-string
   "## CONTEXT:\n```%s\n%s\n```\n\n## PROMPT:\n"
   "The format string to use with `format' for building the context message.
@@ -287,6 +303,21 @@ See `ellm--add-context-from-region' for usage details.")
 (defun ellm--get-mistral-api-key-from-env ()
   "Get the Mistral API key from the environment."
   (getenv "MISTRAL_API_KEY"))
+
+(defun ellm--alist-find-index (key alist)
+  "Find the index of `KEY' in `ALIST'.
+Return nil if `KEY' is not found."
+  (seq-position alist key))
+
+(defun ellm-set-system-message (&optional system-message)
+  "Set the system message to use for the LLM prompt."
+  (interactive)
+  (let ((sm (or system-message
+                (completing-read "Choose system message: "
+                                 (mapcar 'car ellm-system-messages)))))
+    (setq ellm-system-message-index (alist-get sm ellm-system-messages)
+          ellm--current-system-message-index (seq-position ellm-system-messages (cons sm ellm-system-messages)))
+    (message "...system message set to %s..." sm)))
 
 (defun ellm-set-provider (&optional provider)
   "Set the API `PROVIDER' to use."
@@ -366,7 +397,8 @@ See `ellm--add-context-from-region' for usage details.")
                   (cons (ellm--provider-description) 'ellm-set-provider)
                   (cons (ellm--model-size-description) 'ellm-set-model-size)
                   (cons (ellm--temperature-description) 'ellm-set-temperature)
-                  (cons (ellm--max-tokens-description) 'ellm-set-max-tokens)))
+                  (cons (ellm--max-tokens-description) 'ellm-set-max-tokens)
+                  (cons (ellm--system-message-description) 'ellm-set-system-message)))
         (minibuffer-local-map (copy-keymap minibuffer-local-map)))
     (define-key minibuffer-local-map (kbd "q") 'abort-recursive-edit)
     (let ((minibuffer-allow-text-properties t)
@@ -374,6 +406,12 @@ See `ellm--add-context-from-region' for usage details.")
       (alist-get
        (completing-read "Choose a setting to configure: " (mapcar 'car choices))
        choices nil nil 'equal))))
+
+(defun ellm--system-message-description ()
+  "Return a string describing the current system message."
+  (format "System Message                 %s"
+          (propertize (nth ellm--current-system-message-index ellm-system-messages)
+                      'face 'font-lock-type-face)))
 
 (defun ellm--provider-description ()
   "Return a string describing the current provider."
@@ -931,7 +969,7 @@ where [HC] is `HEADLINE-CHAR' or \"#\" by default."
 
 (defun ellm--markdown-to-org-sync (markdown-string)
   "Convert `MARKDOWN-STRING' from Markdown to Org using Pandoc."
-  (let* ((pandoc-command "pandoc -f markdown+tex_math_single_backslash -t org --shift-heading-level-by=1")
+  (let* ((pandoc-command "pandoc -f markdown+tex_math_single_backslash -t org --shift-heading-level-by=1 --lua-filter=/home/jfa/projects/emacs/ellm/format_org.lua")
          (org-string
           (with-temp-buffer
             (insert markdown-string)
@@ -1148,16 +1186,17 @@ Returns the resulting POINT if the point is moved to the top of the
 conversation, or throws an error otherwise."
   (unless (ellm--point-at-conversation-p)
     (user-error "Point is not within a conversation"))
-  (if-let* ((top-headline-p
-             (lambda (el) (and (eq 'headline (org-element-type el))
-                               (eql 1 (org-element-property :level el)))))
-            (ancestors (org-element-lineage (org-element-at-point)))
-            (top-headline
-             (cl-find-if top-headline-p
-                         ancestors
-                         :from-end)))
-      (goto-char (org-element-property :begin top-headline))
-    (error "No top-level headline found")))
+  (unless (looking-at-p "^\\* ")
+    (if-let* ((top-headline-p
+               (lambda (el) (and (eq 'headline (org-element-type el))
+                                 (eql 1 (org-element-property :level el)))))
+              (ancestors (org-element-lineage (org-element-at-point)))
+              (top-headline
+               (cl-find-if top-headline-p
+                           ancestors
+                           :from-end)))
+        (goto-char (org-element-property :begin top-headline))
+      (error "No top-level headline found"))))
 
 (defun ellm--goto-first-top-level-heading ()
   "Move the point to the first top-level heading in the current buffer.
@@ -1338,11 +1377,39 @@ Will call `json-encode' on `DATA' if
       (org-narrow-to-element)
       (ellm--org-apply-rating-face))))
 
-(defun ellm-fold-conversations-buffer ()
+(defun ellm-org-fold-conversations-buffer ()
   "Fold all conversations in the `ellm--conversations-file'."
   (interactive)
   (org-overview)
   (ellm--goto-first-top-level-heading))
+
+(defun ellm-org-next-message ()
+  "Move to the next User or Assistant message based on TYPE."
+  (interactive)
+  (save-restriction
+    (save-excursion
+      (ellm--goto-conversation-top)
+      (org-narrow-to-subtree)
+      (org-fold-show-subtree))
+    (let ((message-regex "^\\*\\{1,8\\} +\\(User\\|Assistant\\)")
+          match-pos)
+      (save-excursion
+        (when (looking-at message-regex) (forward-line))
+        (setq match-pos (re-search-forward message-regex nil t)))
+      (when match-pos
+        (goto-char (match-beginning 0))))))
+
+(defun ellm-org-previous-message ()
+  "Move to the previous User or Assistant message.
+When at the top of the conversation, fold the subtree."
+  (interactive)
+  (save-restriction
+    (save-excursion
+      (ellm--goto-conversation-top)
+      (org-narrow-to-subtree))
+    (let ((regex "^\\*\\{1,8\\} +\\(User\\|Assistant\\)"))
+      (when (re-search-backward regex nil t)
+        (goto-char (match-beginning 0))))))
 
 (defun ellm--extract-symbol-definition-at-point (&optional variablep)
   "Extract the definition of the symbol at point.
@@ -1426,7 +1493,9 @@ Note that `FILENAME' should be an absolute path to the file."
             (define-key map (kbd "C-c ; c") #'ellm-set-config)
             (define-key map (kbd "C-c ; ;") #'ellm-show-conversations-buffer)
             (define-key map (kbd "C-c ; s") #'ellm-toggle-save-conversations)
-            (define-key map (kbd "C-c ; o") #'ellm-fold-conversations-buffer)
+            (define-key map (kbd "C-c ; o") #'ellm-org-fold-conversations-buffer)
+            (define-key map (kbd "C-c ; j") #'ellm-org-next-message)
+            (define-key map (kbd "C-c ; k") #'ellm-org-previous-message)
             map)
   :global true
   (if ellm-mode
