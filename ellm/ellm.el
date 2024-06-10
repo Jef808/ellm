@@ -238,7 +238,8 @@ of the subject at hand.")
     ("question-and-answer" . "You are an expert technical assistant integrated with Emacs.
 Your primary task is to precisely and succinctly answer the user's technical questions.
 When answering, ensure that your responses are directly relevant to the question asked.
-If needed, request further information or clarifications from the user to provide better support.
+If you are unsure or don't have enough information to provide a confident answer, \
+simply say \"I don't know\" or \"I'm not sure.\"
 Avoid unnecessary details and focus on accuracy and relevance.")
 
     ("code-refactoring" . "You are an expert code refactoring assistant integrated with Emacs.
@@ -272,7 +273,13 @@ instructions for the language models in new conversations."
   "The index of the current system message in `ellm-system-messages'.")
 
 (defvar ellm-prompt-context-fmt-string
-  "## CONTEXT:\n```%s\n%s\n```\n\n## PROMPT:\n"
+  "## CONTEXT:\n```%s\n%s\n```\n\n## PROMPT:\n%s"
+  "The format string to use with `format' for building the context message.
+This message will be prepended to the first user prompt of a conversation.
+See `ellm--add-context-from-region' for usage details.")
+
+(defvar ellm-prompt-context-fmt-string-anthropic
+  "<context>\n```%s\n%s\n```\n</context>\n<prompt>\n%s\n</prompt>"
   "The format string to use with `format' for building the context message.
 This message will be prepended to the first user prompt of a conversation.
 See `ellm--add-context-from-region' for usage details.")
@@ -558,6 +565,10 @@ When togling off, restore the previously set values."
   (let ((properties (ellm--get-model-properties conversation)))
     (plist-get properties :provider)))
 
+(defun ellm--model-provider (model)
+  "Get the provider of the `MODEL'."
+  (plist-get (alist-get model ellm-model-alist) :provider))
+
 (defun ellm--get-model-size (conversation)
   "Get the size of the model in `CONVERSATION'."
   (plist-get (ellm--get-model-properties conversation) :size))
@@ -590,43 +601,45 @@ a lookup to `ellm--major-mode-to-org-lang-alist' with the buffer's major mode
 is used except for the special case of `org-mode'.
 If the buffer's major mode is `org-mode' and a region within an org code
 block is marked, use the source block's language."
-  (let ((prefix
-         (when (use-region-p)
-           (let* ((r-beg (region-beginning))
-                  (r-end (region-end))
-                  (mode major-mode)
-                  (lang (or (alist-get mode ellm--major-mode-to-org-lang-alist "text"))))
-             (when (eq mode 'org-mode)
-               (save-excursion
-                 (goto-char r-beg)
-                 (let* ((el (org-element-at-point-no-context))
-                        (el-beg (org-element-property :begin el))
-                        (el-end (org-element-property :end el)))
-                   (when (and (eq (org-element-type el) 'src-block)
-                              (<= el-beg r-beg)
-                              (>= el-end r-end))
-                     (progn
-                       (setq lang (org-element-property :language el))
-                       (let ((cmp-lines
-                              (lambda (op p q)
-                                (let ((p-line (progn (goto-char p)
-                                                     (line-number-at-pos)))
-                                      (q-line (progn (goto-char q)
-                                                     (line-number-at-pos))))
-                                  (funcall op p-line q-line)))))
-                         (when (funcall cmp-lines #'= r-beg el-beg)
-                           (goto-char el-beg)
-                           (setq r-beg (+ (line-end-position) 1)))
-                         (goto-char (- el-end (+ (org-element-property :post-blank el) 1)))
-                         (goto-char (line-beginning-position))
-                         (when (<= (point) r-end)
-                           (setq r-end (- (point) 1)))))))))
-             (deactivate-mark)
-             (format ellm-prompt-context-fmt-string
-                     lang
-                     (buffer-substring-no-properties r-beg r-end))))))
-    (concat prefix prompt)))
-
+  (when (use-region-p)
+    (let* ((r-beg (region-beginning))
+           (r-end (region-end))
+           (mode major-mode)
+           (lang (or (alist-get mode ellm--major-mode-to-org-lang-alist "text")))
+           (string-template
+            (if (eq (ellm--model-provider ellm-model) 'anthropic)
+                ellm-prompt-context-fmt-string-anthropic
+              ellm-prompt-context-fmt-string)))
+      (when (eq mode 'org-mode)
+        (save-excursion
+          (goto-char r-beg)
+          (let* ((el (org-element-at-point-no-context))
+                 (el-beg (org-element-property :begin el))
+                 (el-end (org-element-property :end el)))
+            (when (and (eq (org-element-type el) 'src-block)
+                       (<= el-beg r-beg)
+                       (>= el-end r-end))
+              (progn
+                (setq lang (org-element-property :language el))
+                (let ((cmp-lines
+                       (lambda (op p q)
+                         (let ((p-line (progn (goto-char p)
+                                              (line-number-at-pos)))
+                               (q-line (progn (goto-char q)
+                                              (line-number-at-pos))))
+                           (funcall op p-line q-line)))))
+                  (when (funcall cmp-lines #'= r-beg el-beg)
+                    (goto-char el-beg)
+                    (setq r-beg (+ (line-end-position) 1)))
+                  (goto-char (- el-end (+ (org-element-property :post-blank el) 1)))
+                  (goto-char (line-beginning-position))
+                  (when (<= (point) r-end)
+                    (setq r-end (- (point) 1)))))))))
+      (deactivate-mark)
+      (format string-template
+              lang
+              (buffer-substring-no-properties r-beg r-end)
+              prompt))))
 
 (defun ellm--make-message (role content)
   "Create a message with the given `ROLE' and `CONTENT'."
