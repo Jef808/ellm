@@ -601,7 +601,7 @@ a lookup to `ellm--major-mode-to-org-lang-alist' with the buffer's major mode
 is used except for the special case of `org-mode'.
 If the buffer's major mode is `org-mode' and a region within an org code
 block is marked, use the source block's language."
-  (when (use-region-p)
+  (if (use-region-p)
     (let* ((r-beg (region-beginning))
            (r-end (region-end))
            (mode major-mode)
@@ -639,7 +639,8 @@ block is marked, use the source block's language."
       (format string-template
               lang
               (buffer-substring-no-properties r-beg r-end)
-              prompt))))
+              prompt))
+      prompt))
 
 (defun ellm--make-message (role content)
   "Create a message with the given `ROLE' and `CONTENT'."
@@ -1470,17 +1471,31 @@ When at the top of the conversation, fold the subtree."
       (when (re-search-backward regex nil t)
         (goto-char (match-beginning 0))))))
 
-(defun ellm--extract-symbol-definition-at-point (&optional variablep)
-  "Extract the definition of the symbol at point.
-
-If `VARIABLEP' is non-nil, treat the symbol as a variable."
+(defun ellm--extract-symbol-definition-at-point ()
+  "Extract the definition of the symbol at point."
   (let* ((symbol (symbol-at-point))
          (documentation-fn (lambda (s)
-                             (if variablep
-                                 (documentation-property s 'variable-documentation 'raw)
-                               (documentation s 'raw))))
+                             (if (fboundp s)
+                                 (or (documentation s) "not documented")
+                               (or (documentation-property s 'variable-documentation) "not documented"))))
          (doc (funcall documentation-fn (symbol-at-point))))
     (cons symbol doc)))
+
+(defun ellm--describe-symbols (pattern)
+  "Describe the Emacs Lisp symbols matching `PATTERN'."
+  (interactive "sDescribe symbols matching: ")
+  (let* ((fun-list '())
+         (var-list '())
+         (doc-func
+          (lambda (s)
+            (if (fboundp s)
+                (push (cons s (or (documentation s) "not documented")) fun-list)
+              (when (boundp s)
+                (push (cons s (or (documentation-property s 'variable-documentation) "not documented")) var-list))))))
+    (mapatoms (lambda (sym)
+                (when (string-match pattern (symbol-name sym))
+                    (funcall doc-func sym))))
+    `((variables . ,(nreverse var-list)) (functions . ,(nreverse fun-list)))))
 
 (defun ellm--extract-definitions-in-buffer ()
   "Extract all variable and function definitions in the current buffer."
@@ -1490,7 +1505,7 @@ If `VARIABLEP' is non-nil, treat the symbol as a variable."
     (save-excursion
       (goto-char (point-min))
       (while (re-search-forward "^(\\(?:defvar\\|defcustom\\) " nil t)
-        (push (ellm--extract-symbol-definition-at-point 'variable) variables))
+        (push (ellm--extract-symbol-definition-at-point) variables))
       (goto-char (point-min))
       (while (re-search-forward "^(defun " nil t)
         (push (ellm--extract-symbol-definition-at-point) functions)))
@@ -1499,7 +1514,7 @@ If `VARIABLEP' is non-nil, treat the symbol as a variable."
 (defun ellm--extract-and-show-definitions-in-json ()
   "Extract and print all variable and function definitions in the current buffer."
   (interactive)
-  (let* ((definitions (ellm--extract-definitions-in-buffer))
+  (let* ((definitions (ellm--describe-symbols "ellm-"))
          (json-string (json-serialize definitions)))
     (with-current-buffer (get-buffer-create "*Definitions JSON*")
       (erase-buffer)
@@ -1512,19 +1527,11 @@ If `VARIABLEP' is non-nil, treat the symbol as a variable."
 
 Note that `FILENAME' should be an absolute path to the file."
   (interactive "FEnter filename to save definitions: ")
-  (let* ((definitions (ellm--extract-definitions-in-buffer)))
-    (ellm--save-object-in-json definitions filename)))
-
-(defun ellm--save-object-in-json (object filename)
-  "Save an `OBJECT' to a `FILENAME' in JSON format."
-  (interactive)
-  (let* ((json-string (json-serialize object)))
+  (let* ((definitions (ellm--describe-symbols "ellm-"))
+         (json-string (json-serialize definitions)))
     (with-temp-file filename
       (insert json-string)
-      (json-pretty-print (point-min) (point-max) 'minimize)
-      (buffer-substring-no-properties (point-min) (point-max))
-      (newline)))
-  nil)
+      (newline))))
 
 (defun ellm--server-running-p ()
   "Return non-nil if the ellm server is running."
