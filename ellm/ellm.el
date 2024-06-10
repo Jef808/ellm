@@ -176,11 +176,6 @@
   :type 'boolean
   :group 'ellm)
 
-(defcustom ellm--time-format-string "[%Y-%m-%d %a %H:%M]"
-  "The format string to use with `format-time-string' for displaying conversations."
-  :type 'string
-  :group 'ellm)
-
 (defcustom ellm--debug-mode nil
   "If non nil, log each request and response to the `ellm--log-buffer-name' buffer."
   :type 'boolean
@@ -195,7 +190,7 @@
     (rating-3 '(:foreground "yellow"))
     (rating-2 '(:foreground "orange"))
     (rating-1 '(:foreground "red")))
-  "Face for the ellm-org mode.")
+  "Faces indicating the user ratings of conversations.")
 
 (defcustom ellm-system-message "You are a useful emacs-integrated general assistant.
 Your goal is to execute the user's task or precisely answer their questions, using all \
@@ -269,7 +264,7 @@ instructions for the language models in new conversations."
   :type 'alist
   :group 'ellm)
 
-(defvar ellm--current-system-message "default"
+(defvar ellm-current-system-message "default"
   "The index of the current system message in `ellm-system-messages'.")
 
 (defvar ellm-prompt-context-fmt-string
@@ -324,9 +319,9 @@ See `ellm--add-context-from-region' for usage details.")
   "Alist mapping providers to their API configurations.")
 
 (defun ellm--get-system-message ()
-  "Get the system message based on `ellm--current-system-message'."
+  "Get the system message based on `ellm-current-system-message'."
   (concat
-   (alist-get ellm--current-system-message ellm-system-messages nil nil 'equal)
+   (alist-get ellm-current-system-message ellm-system-messages nil nil 'equal)
    ellm--system-message-suffix))
 
 (defun ellm--get-provider-configuration (provider)
@@ -359,7 +354,7 @@ See `ellm--add-context-from-region' for usage details.")
                                       (format
                                        (propertize (car cons-message) 'face 'font-lock-string-face)))
                                        ellm-system-messages)))))
-    (setq ellm--current-system-message sm)
+    (setq ellm-current-system-message sm)
     (message "...system message set to %s..." sm)))
 
 (defun ellm-set-provider (&optional provider)
@@ -463,7 +458,7 @@ See `ellm--add-context-from-region' for usage details.")
 (defun ellm--system-message-description ()
   "Return a string describing the current system message."
   (format "System Message                  %s"
-          (propertize ellm--current-system-message
+          (propertize ellm-current-system-message
                       'face 'font-lock-string-face)))
 
 (defun ellm--provider-description ()
@@ -565,10 +560,6 @@ When togling off, restore the previously set values."
   (let ((properties (ellm--get-model-properties conversation)))
     (plist-get properties :provider)))
 
-(defun ellm--model-provider (model)
-  "Get the provider of the `MODEL'."
-  (plist-get (alist-get model ellm-model-alist) :provider))
-
 (defun ellm--get-model-size (conversation)
   "Get the size of the model in `CONVERSATION'."
   (plist-get (ellm--get-model-properties conversation) :size))
@@ -607,7 +598,7 @@ block is marked, use the source block's language."
            (mode major-mode)
            (lang (or (alist-get mode ellm--major-mode-to-org-lang-alist "text")))
            (string-template
-            (if (eq (ellm--model-provider ellm-model) 'anthropic)
+            (if (eq ellm-provider 'anthropic)
                 ellm-prompt-context-fmt-string-anthropic
               ellm-prompt-context-fmt-string)))
       (when (eq mode 'org-mode)
@@ -1282,26 +1273,14 @@ those variables to the `savehist-additional-variables' list. This ensures
 that the values of these variables are saved and restored across Emacs
 sessions.
 
-The variables that are registered for persistence are:
-
-- `ellm-max-tokens': The maximum number of tokens to generate in the
-  completion.
-- `ellm-model-size': The size of the model to use.
-- `ellm-provider': The provider of the language model.
-- `ellm-temperature': The temperature to use for sampling during completion.
-- `ellm-save-conversations': A boolean value indicating whether to save
-  conversations.
-- `ellm--debug-mode': A boolean value indicating whether to enable debug
-  mode.
-
-Note that this function does not actually save the variables. It only
-registers them with the `savehist' package, which will save them when it
-saves the Emacs session. Similarly, it does not restore the variables.
-The `savehist' package will restore them when it restores the Emacs
-session.
+The variables that are registered for persistence are
+`ellm-current-system-message', `ellm-max-tokens', `ellm-model-size',
+`ellm-provider', `ellm-temperature', `ellm-save-conversations'
+and `ellm--debug-mode'.
 
 This function does not take any arguments and returns nil."
-  (let ((symbols-to-add '(ellm-max-tokens
+  (let ((symbols-to-add '(ellm-current-system-message
+                          ellm-max-tokens
                           ellm-model-size
                           ellm-provider
                           ellm-temperature
@@ -1316,7 +1295,7 @@ Will call `json-encode' on `DATA' if
 `SHOULD-ENCODE-TO-JSON' is set to a non-nil value."
   (let* ((json-data (if should-encode-to-json (json-encode data) data))
          (formatted-log (format "{\"TIMESTAMP\": \"%s\", \"%s\": %s}"
-                                (format-time-string ellm--time-format-string)
+                                (format-time-string "[%Y-%m-%d %a %H:%M]")
                                 (or label "INFO")
                                 json-data)))
     (with-current-buffer (get-buffer-create ellm--log-buffer-name)
