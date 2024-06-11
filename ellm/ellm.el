@@ -168,8 +168,11 @@
   :type 'alist
   :group 'ellm)
 
-(defvar ellm--providers-supported '(anthropic openai groq mistral)
-  "List of supported providers.")
+(defun ellm--providers-supported ()
+    "List of supported providers."
+  (seq-uniq (mapcar
+             (lambda (model)
+               (plist-get (cdr model) :provider)) ellm-model-alist)))
 
 (defcustom ellm-save-conversations t
   "If non-nil, save the conversation history to `ellm--conversations-file'."
@@ -219,7 +222,7 @@ Format your response in markdown."
   "The system message suffix to append to the system message.")
 
 (defcustom ellm-system-messages
-  `(("default" . "You are a useful general assistant integrated with Emacs.
+  `((default . "You are a useful general assistant integrated with Emacs.
 Your goal is to execute the user's task or precisely answer their questions, \
 using all the CONTEXT the user provides (if any).
 Ensure your responses are relevant and adequate based on the nature of the query.
@@ -230,41 +233,48 @@ Avoid unnecessary politeness and organizational sections.
 Instead, focus on providing clear, relevant examples and the technical aspects \
 of the subject at hand.")
 
-    ("question-and-answer" . "You are an expert technical assistant integrated with Emacs.
-Your primary task is to precisely and succinctly answer the user's technical questions.
+    (question-and-answer . "You are an expert technical assistant integrated with Emacs.
+Your primary task is to precisely and accurately answer the user's technical questions.
 When answering, ensure that your responses are directly relevant to the question asked.
 If you are unsure or don't have enough information to provide a confident answer, \
 simply say \"I don't know\" or \"I'm not sure.\"
-Avoid unnecessary details and focus on accuracy and relevance.")
+Avoid unnecessary politeness details and focus on accuracy and relevance.")
 
-    ("code-refactoring" . "You are an expert code refactoring assistant integrated with Emacs.
+    (code-refactoring . "You are an expert code refactoring assistant integrated with Emacs.
 Your primary task is to assist with improving and optimizing existing code.
 Identify inefficient or outdated code patterns and suggest better alternatives.
 Ensure that the refactored code remains functionally equivalent to the original.
 If there are multiple valid ways to refactor, present the options and recommend the most efficient one.
 Provide clear, concise code samples highlighting the changes.")
 
-    ("code-review" . "You are an expert code review assistant integrated with Emacs.
+    (code-review . "You are an expert code review assistant integrated with Emacs.
 Your primary task is to assist with reviewing code, identifying potential issues, and suggesting improvements.
 Focus on code logic, best practices, performance, and readability.
 Provide constructive feedback, indicating both strengths and areas for improvement.
 Ensure your comments are clear, specific, and actionable.
-Feel free to request additional context or clarifications if necessary.")
+Feel free to request additional context or clarifications if necessary.
+Avoid unnecessary politeness and organizational sections like a closing summary.")
 
-    ("code-generation" . "You are an expert code assistant integrated with Emacs.
+    (code-generation . (lambda ()
+                         (format "You are an expert %s programmer integrated with Emacs.
 Your primary task is to assist with code generation, ensuring accuracy and efficiency.
 When generating code, use the provided CONTEXT to tailor your responses to the user's needs.
 Provide well-commented, clean, and efficient code samples.
 If the problem can be solved in multiple ways, briefly state the options and recommend the most efficient one.
 When you encounter incomplete or ambiguous instructions, seek clarifications from the user.
-Maintain a focus on technical precision and completeness without redundant explanations or politeness."))
+Maintain a focus on technical precision and completeness without redundant explanations or politeness."
+                                 (when (derived-mode-p 'prog-mode)
+                                   (thread-last (symbol-name major-mode)
+                                                (string-remove-suffix "-mode")
+                                                (string-remove-suffix "-ts")))))))
   "Alist mapping system message names to their content.
 The content of those messages are the system messages that will be used as
 instructions for the language models in new conversations."
-  :type 'alist
+  :safe #'always
+  :type '(alist :key-type symbol :value-type (choice string function))
   :group 'ellm)
 
-(defvar ellm-current-system-message "default"
+(defvar ellm-current-system-message 'default
   "The index of the current system message in `ellm-system-messages'.")
 
 (defvar ellm-prompt-context-fmt-string
@@ -278,6 +288,12 @@ See `ellm--add-context-from-region' for usage details.")
   "The format string to use with `format' for building the context message.
 This message will be prepended to the first user prompt of a conversation.
 See `ellm--add-context-from-region' for usage details.")
+
+(defconst ellm-org--buffer-props
+  '(:STARTUP overview
+    :SETUPFILE "~/repos/org-html-themes/org/theme-readtheorg-local.setup"
+    :OPTIONS toc:nil)
+  "Properties to set for conversations buffers.")
 
 (defvar ellm-auto-export nil
   "If non-nil, the chat is automatically exported when the response is received.")
@@ -320,9 +336,11 @@ See `ellm--add-context-from-region' for usage details.")
 
 (defun ellm--get-system-message ()
   "Get the system message based on `ellm-current-system-message'."
-  (concat
-   (alist-get ellm-current-system-message ellm-system-messages nil nil 'equal)
-   ellm--system-message-suffix))
+  (unless ellm--test-mode
+    (let* ((system-message (alist-get ellm-current-system-message ellm-system-messages))
+           (effective-system-message
+            (if (functionp system-message) (funcall system-message) system-message)))
+      (concat effective-system-message ellm--system-message-suffix))))
 
 (defun ellm--get-provider-configuration (provider)
   "Get the configuration for the `PROVIDER'."
@@ -348,12 +366,12 @@ See `ellm--add-context-from-region' for usage details.")
   "Set the `SYSTEM-MESSAGE' to use for the next prompt."
   (interactive)
   (let ((sm (or system-message
-                (completing-read "Choose system message: "
+                (intern (completing-read "Choose system message: "
                                  (mapcar
                                   #'(lambda (cons-message)
                                       (format
-                                       (propertize (car cons-message) 'face 'font-lock-string-face)))
-                                       ellm-system-messages)))))
+                                       (propertize (symbol-name (car cons-message)) 'face 'font-lock-string-face)))
+                                       ellm-system-messages))))))
     (setq ellm-current-system-message sm)
     (message "...system message set to %s..." sm)))
 
@@ -366,7 +384,7 @@ See `ellm--add-context-from-region' for usage details.")
                          (mapcar #'(lambda (item)
                                      (format
                                       (propertize (symbol-name item) 'face 'font-lock-type-face)))
-                                      ellm--providers-supported)))))
+                                      (ellm--providers-supported))))))
          (config (ellm--get-provider-configuration p))
          (models-alist (alist-get 'models-alist config)))
     (setq ellm-model (alist-get ellm-model-size models-alist)
@@ -458,7 +476,7 @@ See `ellm--add-context-from-region' for usage details.")
 (defun ellm--system-message-description ()
   "Return a string describing the current system message."
   (format "System Message                  %s"
-          (propertize ellm-current-system-message
+          (propertize (symbol-name ellm-current-system-message)
                       'face 'font-lock-string-face)))
 
 (defun ellm--provider-description ()
@@ -498,6 +516,9 @@ When togling off, restore the previously set values."
       (put 'ellm-max-tokens 'previous-value nil)
       (put 'ellm-model-size 'previous-value nil)
       (setq ellm--test-mode nil)
+      (when-let ((temp-buffer (get-buffer ellm--temp-conversations-buffer-name))
+                 (inhibit-read-only t))
+        (kill-buffer temp-buffer))
       (message "...ellm-test-mode disabled..."))
     (progn
       (put 'ellm-max-tokens 'previous-value (symbol-value 'ellm-max-tokens))
@@ -507,7 +528,17 @@ When togling off, restore the previously set values."
       (ellm-set-model-size 'small)
       (setq ellm-save-conversations nil)
       (setq ellm--test-mode t)
-      (message "...ellm-test-mode enabled..."))))
+      (with-current-buffer
+          (get-buffer-create ellm--temp-conversations-buffer-name)
+        (org-mode)
+        (goto-char (point-min))
+        (let ((plist ellm-org--buffer-props))
+          (while plist
+            (let ((prop (substring (symbol-name (car plist)) 1))
+                  (value (cadr plist)))
+              (insert (format "#+%s: %s\n" prop value)))
+            (setq plist (cddr plist))))
+      (message "...ellm-test-mode enabled...")))))
 
 (defun ellm-toggle-debug-mode ()
   "Toggle debug mode."
@@ -601,6 +632,7 @@ block is marked, use the source block's language."
             (if (eq ellm-provider 'anthropic)
                 ellm-prompt-context-fmt-string-anthropic
               ellm-prompt-context-fmt-string)))
+      (deactivate-mark)
       (when (eq mode 'org-mode)
         (save-excursion
           (goto-char r-beg)
@@ -626,7 +658,6 @@ block is marked, use the source block's language."
                   (goto-char (line-beginning-position))
                   (when (<= (point) r-end)
                     (setq r-end (- (point) 1)))))))))
-      (deactivate-mark)
       (format string-template
               lang
               (buffer-substring-no-properties r-beg r-end)
@@ -700,22 +731,30 @@ The `GET-API-KEY' function is used to retrieve the api key for anthropic."
     (json-serialize (seq-uniq (append `((messages . ,(vconcat messages))) conversation)))))
 
 (defun ellm--prepare-request-body-default (conversation)
-  "Prepare the messages list with a new user message based on `CONVERSATION'."
-  (let ((data (copy-alist conversation)))
-    (let* ((messages (cl-copy-list (alist-get 'messages data)))
-           (system-message (alist-get 'system data)))
-      (setf (alist-get 'messages data) messages)
-      (ellm--add-system-message system-message data)
-      (setf (alist-get 'system data nil t) nil))
-    (setf (alist-get 'title data nil t) nil)
-    (setf (alist-get 'id data nil t) nil)
+  "Prepare the messages list with a new user message based on `CONVERSATION'.
+The SYSTEM entry, if non-nil, is removed and made into a system message intead.
+Also remove the TITLE and ID entries."
+  (let* ((data (copy-alist conversation))
+         (messages (cl-copy-list (alist-get 'messages data)))
+         (system-message (alist-get 'system data)))
+    (setf (alist-get 'messages data) messages)
+    (when system-message
+      (ellm--add-system-message system-message data))
+    (setf (alist-get 'system data nil 'remove) nil)
+    (setf (alist-get 'title data nil 'remove) nil)
+    (setf (alist-get 'id data nil 'remove) nil)
     (json-encode data)))
 
 (defun ellm--prepare-request-body-anthropic (conversation)
-  "Prepare the API call body to send `CONVERSATION'."
-  (let ((data (copy-alist conversation)))
-    (setf (alist-get 'title data nil t) nil)
-    (setf (alist-get 'id data nil t) nil)
+  "Prepare the API call body to send `CONVERSATION'.
+Remove the SYSTEM entry in case it is nil.
+Also remove the TITLE and ID entries."
+  (let* ((data (copy-alist conversation))
+         (system-message (alist-get 'system data)))
+    (unless system-message
+      (setf (alist-get 'system data nil 'remove) nil))
+    (setf (alist-get 'title data nil 'remove) nil)
+    (setf (alist-get 'id data nil 'remove) nil)
     (ellm--serialize-conversation data)))
 
 (defun ellm--prepare-request-body (conversation)
@@ -723,16 +762,6 @@ The `GET-API-KEY' function is used to retrieve the api key for anthropic."
   (let* ((provider (ellm--get-model-provider conversation))
          (config (alist-get provider ellm-provider-configurations)))
     (funcall (alist-get 'prepare-request-body config) conversation)))
-    ;;      (prepare-fn (alist-get 'prepare-request-body config)))
-    ;; (funcall prepare-fn conversation)))
-
-(defun ellm--get-route-target (conversation)
-  "Get the endpoint to send the request to based on `CONVERSATION'."
-  (let* ((provider (ellm--get-model-provider conversation))
-         (config (alist-get provider ellm-provider-configurations)))
-    (or (alist-get 'route-target config)
-        (error "ellm--get-route-target: Unknown provider or missing route target: %s"
-               (symbol-name provider)))))
 
 (defun ellm--get-url (conversation)
   "Get the URL to send the request to based on `CONVERSATION'."
@@ -742,18 +771,24 @@ The `GET-API-KEY' function is used to retrieve the api key for anthropic."
         (error "ellm--get-url: Unknown provider or missing base url: %s"
                (symbol-name provider)))))
 
-(defun ellm--get-conversation-file-path ()
-  "Get the filename for the conversation."
-  (let ((filename-suffix
-         (if-let ((current (project-current)))
-             (project-name current)
-           "general")))
-    (f-join ellm--conversations-dir
+(defun ellm-conversations-buffer-from-project ()
+  "Get the conversations buffer associated to the current project.
+The project is determined by calling `project-current' (which see).
+In case the function was called interactively, `project-current' is called
+with a non-nil MAYBE-PROMPT argument."
+  (interactive)
+  (let* ((maybe-prompt (called-interactively-p 'interactive))
+         (filename-suffix
+          (if-let ((current (project-current maybe-prompt)))
+              (project-name current)
+            "general"))
+         (filepath (f-join ellm--conversations-dir
             (concat ellm--conversations-filename-prefix
                     filename-suffix
                     ".org"))))
+    (find-file-noselect filepath)))
 
-(defun ellm-chat (&optional current-conversation conversation-filepath next-prompt)
+(defun ellm-chat (&optional current-conversation conversations-buffer next-prompt)
   "Send a request to the current provider's chat completion endpoint.
 
 This function serves as the main entry point for interacting with the `ellm`
@@ -766,9 +801,10 @@ ongoing
  conversation. If provided, the conversation will be continued with the next
 prompt
  and the associated response. If nil, a new conversation will be initialized.
-- `CONVERSATION-FILEPATH` (optional): A string representing the file path where
+- `CONVERSATIONS-BUFFER` (optional): A string representing the file path where
 the conversation should be saved. If nil, the conversation will be saved to a
-default location determined by the `ellm--get-conversation-file-path` function.
+default location determined by the `ellm-conversations-buffer-from-project`
+function.
 - `NEXT-PROMPT` (optional): A string representing the next prompt to be sent to
 the model provider. If nil, the prompt will be read interactively from the
 minibuffer.
@@ -779,12 +815,12 @@ Behavior:
 2. It reads the prompt either from `NEXT-PROMPT` or interactively from the
 minibuffer.
 3. It determines the file path for saving the conversation using
-`CONVERSATION-FILEPATH` or a default method.
+`CONVERSATIONS-BUFFER` or a default method.
 4. It updates the conversation object by adding the user's message if
 `CURRENT-CONVERSATION` is provided,
    or initializes a new conversation if not.
-5. It constructs the URL for the request using the conversation object.
-6. It prepares the request headers and body based on the conversation object.
+5. It constructs the URL for the request using the conversation provider.
+6. It prepares the request headers and body based on the conversation provider.
 7. It sets the HTTP method to \"POST\" and configures the request with the
 prepared headers and body.
 8. It logs the request details for debugging purposes.
@@ -801,13 +837,17 @@ Example usage:
   (ellm-chat)
   (ellm-chat my-conversation)
   (ellm-chat nil nil \"What is the weather today?\")
-  (ellm-chat my-conversation \"/path/to/save/conversation\" \"Tell me a joke.\")"
+  (ellm-chat my-conversation
+   (buffer-get \"conversations-general.org\") \"Tell me a joke.\")"
   (interactive)
   (let* ((prompt-message (if current-conversation
                              "Enter your next prompt: "
                            "Enter your prompt: "))
          (prompt (or next-prompt (read-string prompt-message)))
-         (filepath (or conversation-filepath (ellm--get-conversation-file-path)))
+         (buffer (or conversations-buffer
+                     (if ellm-save-conversations
+                         (ellm-conversations-buffer-from-project)
+                       (get-buffer-create ellm--temp-conversations-buffer-name))))
          (conversation (or
                         (and current-conversation
                              (ellm--add-user-message prompt current-conversation))
@@ -819,16 +859,16 @@ Example usage:
          (url-request-extra-headers request-headers)
          (url-request-data request-body))
       (ellm--log-request url request-headers request-body)
-      (url-retrieve url #'ellm--handle-response (list filepath conversation))
+      (url-retrieve url #'ellm--handle-response (list buffer conversation))
       (message "...Waiting for response from %s..." (symbol-name (ellm--get-model-provider conversation)))
   nil))
 
-(defun ellm--handle-response (status conversation-filepath conversation)
+(defun ellm--handle-response (status conversations-buffer conversation)
   "Handle the response to the prompt made using `CONVERSATION'.
 
 Information about the response is contained in `STATUS' (see `url-retrieve').
 The response is added to the `CONVERSATION' and the conversation is added or
-updated in the file at `CONVERSATION-FILEPATH'."
+updated in the `CONVERSATIONS-BUFFER'."
   (message "...Received response from %s..."
            (symbol-name (ellm--get-model-provider conversation)))
   (cond ((plist-get status :error)
@@ -841,15 +881,15 @@ updated in the file at `CONVERSATION-FILEPATH'."
              (ellm--log-no-response-body)
            (let ((response (ellm--parse-json-response)))
              (when response
-               (ellm--add-response-to-conversation conversation-filepath conversation response)
+               (ellm--add-response-to-conversation conversations-buffer conversation response)
                (message "...Conversation updated..."))
              response)))))
 
-(defun ellm--add-response-to-conversation (conversation-filepath conversation response)
+(defun ellm--add-response-to-conversation (conversations-buffer conversation response)
   "Process the `RESPONSE' from the API call made with config `CONVERSATION'.
 
 The `RESPONSE' should be an emacs-lisp hash table.
-The `CONVERSATION' is then saved to the file at `CONVERSATION-FILEPATH'."
+The `CONVERSATION' is then added to the `CONVERSATIONS-BUFFER'."
   (unless (hash-table-p response)
     (error "ellm--add-response-to-conversation: Expected cons, got %s" (type-of response)))
   (let* ((provider (ellm--get-model-provider conversation))
@@ -858,7 +898,7 @@ The `CONVERSATION' is then saved to the file at `CONVERSATION-FILEPATH'."
          (response-content (funcall parse-response response)))
     (ellm--handle-assistant-response response-content conversation)
     (ellm--log-conversation conversation)
-    (ellm--insert-conversation-into-org conversation-filepath conversation)))
+    (ellm--insert-conversation-into-org conversations-buffer conversation)))
 
 (defun ellm--handle-assistant-response (response conversation)
   "Add the `RESPONSE' to the `CONVERSATION'.
@@ -872,8 +912,8 @@ The `RESPONSE' is expected to be a string."
     (ellm--add-or-update-title title conversation)
     (ellm--add-assistant-message content conversation)))
 
-(defun ellm--insert-conversation-into-org (conversation-filepath conversation)
-  "Insert the `CONVERSATION' into the org file at `CONVERSATION-FILEPATH'."
+(defun ellm--insert-conversation-into-org (conversations-buffer conversation)
+  "Insert the `CONVERSATION' into the org file at `CONVERSATIONS-BUFFER'."
   (let* ((messages (alist-get 'messages conversation))
          (number-previous-messages (- (length messages) 2))
          (previous-messages (take number-previous-messages messages))
@@ -882,9 +922,6 @@ The `RESPONSE' is expected to be a string."
          (model (alist-get 'model conversation))
          (temperature (alist-get 'temperature conversation))
          (id (alist-get 'id conversation))
-         (buffer (if ellm-save-conversations
-                     (find-file-noselect conversation-filepath)
-                   (get-buffer-create ellm--temp-conversations-buffer-name)))
          (stringified-previous-messages (ellm--messages-to-string previous-messages "**"))
          (org-formatted-new-messages (ellm--convert-messages-to-org new-messages))
          (messages-to-insert (if stringified-previous-messages
@@ -893,20 +930,18 @@ The `RESPONSE' is expected to be a string."
                                          org-formatted-new-messages)
                                org-formatted-new-messages)))
     (ellm--log-org-messages messages-to-insert)
-    (with-current-buffer buffer
-      (delay-mode-hooks (org-mode))
-      (read-only-mode -1)
-      (if-let ((pos (and ellm-save-conversations (org-id-find id 'marker))))
-          (progn (goto-char pos)
-                 (org-cut-subtree))
-        (setq id (or id (org-id-new))))
-      (goto-char (point-min))
-      (ellm--insert-heading-and-metadata title id model temperature)
-      (insert messages-to-insert)
-      (read-only-mode +1)
-      (when ellm-save-conversations
-        (save-buffer))
-      (ellm--display-conversations-buffer)
+    (with-current-buffer conversations-buffer
+      (let ((inhibit-read-only t))
+        (if-let ((pos (and ellm-save-conversations (org-id-find id 'marker))))
+            (progn (goto-char pos)
+                   (org-cut-subtree))
+          (setq id (or id (org-id-new))))
+        (goto-char (point-min))
+        (ellm--insert-heading-and-metadata title id model temperature)
+        (insert messages-to-insert)
+        (when ellm-save-conversations
+          (save-buffer)))
+      (ellm--display-conversations-buffer conversations-buffer 'highlight-last-message)
       (when ellm-auto-export
         (ellm-export-conversation)))))
 
@@ -1038,16 +1073,15 @@ in the `ellm--temp-conversations-buffer-name' buffer.
 When `ellm-save-conversations' is non-nil, the conversation
 at point will be removed from the org document and the updated conversation
 will be inserted at the top of the document."
-  (let* ((pos (if id (org-id-find id 'marker)
-                (save-excursion (ellm--goto-conversation-top) (point))))
-         (conversation (ellm--parse-conversation pos))
-         (filepath (unless (ellm--at-temp-conversations-buffer-p)
-                     (buffer-file-name (current-buffer)))))
+  (let* ((pom (if id (org-id-find id 'marker)
+                (save-excursion (ellm--goto-conversation-top) (point-marker))))
+         (conversation (ellm--parse-conversation pom))
+         (buffer (marker-buffer pom)))
     (ellm--set-model (alist-get 'model conversation))
     (ellm-set-temperature (alist-get 'temperature conversation))
     (setf (alist-get 'system conversation) (ellm--get-system-message)
           (alist-get 'max_tokens conversation) ellm-max-tokens)
-    (ellm-chat conversation filepath prompt)))
+    (ellm-chat conversation buffer prompt)))
 
 (defun ellm--conversation-subtree ()
   "Return the current conversation subtree."
@@ -1121,16 +1155,24 @@ It is assumed that the point is located at the beginning of a message."
     (insert (org-element-interpret-data org-element))
     (s-trim (buffer-substring-no-properties (point-min) (point-max)))))
 
+(defun ellm--conversations-buffer-p (buffer)
+  "Check if the `BUFFER' is an ellm conversations buffer.
+This could either be the `ellm--temp-conversations-buffer-name' or a buffer
+visiting a file in `ellm--conversations-dir' with name starting with
+the `ellm--conversations-filename-prefix' prefix."
+  (or (equal (buffer-name) ellm--temp-conversations-buffer-name)
+      (with-current-buffer buffer
+        (and
+         (f-equal-p (f-dirname (buffer-file-name (current-buffer)))
+                    ellm--conversations-dir)
+         (string-prefix-p ellm--conversations-filename-prefix
+                          (f-filename (buffer-file-name (current-buffer))))))))
+
 (defun ellm--point-at-conversation-p ()
   "Return non-nil if point is within a conversation subtree."
   (and
-   (eq major-mode 'org-mode)
-   (or (and
-        (f-equal-p (f-dirname (buffer-file-name (current-buffer)))
-                   ellm--conversations-dir)
-        (string-prefix-p ellm--conversations-filename-prefix
-                         (f-filename (buffer-file-name (current-buffer)))))
-       (ellm--at-temp-conversations-buffer-p))
+   (derived-mode-p 'org-mode)
+   (ellm--conversations-buffer-p (current-buffer))
    (not (org-before-first-heading-p))))
 
 (defun ellm--at-temp-conversations-buffer-p ()
@@ -1168,48 +1210,52 @@ conversation can be specified to continue that conversation."
             (ellm--resume-conversation id)
           (ellm-chat)))))
 
-(defun ellm--display-conversations-buffer ()
-  "Prepare the conversations buffer for viewing.
-
-It is assumed that the current buffer is the conversations buffer."
-  (display-buffer (current-buffer))
-  (org-overview)
-  (ellm--goto-first-top-level-heading)
-  (org-fold-show-subtree)
-  (if-let* ((headlines
+(defun ellm--display-conversations-buffer (buffer &optional highlight-last-message)
+  "Display the conversations in `BUFFER'.
+The window is scrolled to the last user message of the last conversation,
+and the point is placed at the next assistant message.
+If `HIGHLIGHT-LAST-MESSAGE' is non-nil, the last user and assistant messages
+is temporarily highlighted to indicate they are new messages."
+  (unless (ellm--conversations-buffer-p buffer)
+    (error "Buffer is not a conversations buffer"))
+  (with-current-buffer buffer
+    (display-buffer (current-buffer))
+    (ellm--org-apply-rating-face)
+    (read-only-mode 1)
+    (org-overview)
+    (ellm--goto-first-top-level-heading)
+    (org-fold-show-subtree)
+    (if-let* ((headlines
                (org-element-map (ellm--conversation-subtree) 'headline 'identity))
               (last-user-message
                (cl-find-if
                 (lambda (hl) (string-match-p "User" (org-element-property :raw-value hl)))
-                headlines
-                :from-end t)))
-      (with-selected-window (get-buffer-window (current-buffer))
-        (goto-char (org-element-property :begin last-user-message))
-        (recenter-top-bottom 0)
-        (org-next-visible-heading 1))
-    (message "No assistant messages found")))
+                headlines :from-end t))
+              (last-user-message-begin
+               (org-element-property :begin last-user-message)))
+        (with-selected-window (get-buffer-window (current-buffer))
+          (goto-char last-user-message-begin)
+          (recenter-top-bottom 4)
+          (org-next-visible-heading 1)
+          (when highlight-last-message
+            (save-excursion
+              (org-end-of-subtree)
+              (pulse-momentary-highlight-region last-user-message-begin (point)))))
+      (message "Last user message not found"))))
 
-(defun ellm-show-conversations-buffer (&optional filepath)
-  "Show the conversations contined in the conversations file.
-
-Which file that is is determined by `ellm--get-conversations-file-path',
-unless `FILEPATH' is non-nil in which case that file is used."
+(defun ellm-show-conversations-buffer (&optional buffer)
+  "Show the conversations `BUFFER'.
+Which file that is is determined by `ellm-conversations-buffer-from-project',
+unless `BUFFER' is non-nil in which case that buffer is used."
   (interactive)
-  (let* ((path
-           (cond ((not (null filepath)) filepath)
-                 ((called-interactively-p 'interactive)
-                  (read-file-name "Select conversation file: " ellm--conversations-dir nil t "/"
-                                  (lambda (f)
-                                    (and
-                                     (equal (file-name-extension f) "org")
-                                     (string-prefix-p ellm--conversations-filename-prefix (f-filename f))))))
-                 (t (ellm--get-conversation-file-path))))
-         (buffer (find-file-other-window path)))
-    (with-current-buffer buffer
-      (delay-mode-hooks (org-mode))
-      (read-only-mode 1)
-      (org-overview)
-      (ellm--org-apply-rating-face))))
+  (unless buffer
+    (if ellm-save-conversations
+        (let ((fun-call
+               (if (called-interactively-p 'interactive)
+                   #'call-interactively #'funcall)))
+          (setq buffer (funcall fun-call #'ellm-conversations-buffer-from-project)))
+      (setq buffer (get-buffer-create ellm--temp-conversations-buffer-name))))
+  (ellm--display-conversations-buffer buffer))
 
 (defun ellm-export-conversation ()
   "Mark the current conversation in the `ellm--conversations-file'."
@@ -1275,8 +1321,7 @@ sessions.
 
 The variables that are registered for persistence are
 `ellm-current-system-message', `ellm-max-tokens', `ellm-model-size',
-`ellm-provider', `ellm-temperature', `ellm-save-conversations'
-and `ellm--debug-mode'.
+`ellm-provider', `ellm-temperature' and `ellm--debug-mode'.
 
 This function does not take any arguments and returns nil."
   (let ((symbols-to-add '(ellm-current-system-message
@@ -1284,7 +1329,6 @@ This function does not take any arguments and returns nil."
                           ellm-model-size
                           ellm-provider
                           ellm-temperature
-                          ellm-save-conversations
                           ellm--debug-mode)))
     (dolist (symbol symbols-to-add)
       (cl-pushnew symbol savehist-additional-variables))))
