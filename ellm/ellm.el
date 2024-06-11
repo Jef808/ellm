@@ -788,6 +788,9 @@ with a non-nil MAYBE-PROMPT argument."
                     ".org"))))
     (find-file-noselect filepath)))
 
+(defvar ellm--prompt-history nil
+  "History list for prompts.")
+
 (defun ellm-chat (&optional current-conversation conversations-buffer next-prompt)
   "Send a request to the current provider's chat completion endpoint.
 
@@ -843,7 +846,7 @@ Example usage:
   (let* ((prompt-message (if current-conversation
                              "Enter your next prompt: "
                            "Enter your prompt: "))
-         (prompt (or next-prompt (read-string prompt-message)))
+         (prompt (or next-prompt (read-string prompt-message nil 'ellm--prompt-history)))
          (buffer (or conversations-buffer
                      (if ellm-save-conversations
                          (ellm-conversations-buffer-from-project)
@@ -1323,13 +1326,17 @@ The variables that are registered for persistence are
 `ellm-current-system-message', `ellm-max-tokens', `ellm-model-size',
 `ellm-provider', `ellm-temperature' and `ellm--debug-mode'.
 
+Additionally, the `ellm--prompt-history' is persisted to maintain the prompt
+history.
+
 This function does not take any arguments and returns nil."
   (let ((symbols-to-add '(ellm-current-system-message
                           ellm-max-tokens
                           ellm-model-size
                           ellm-provider
                           ellm-temperature
-                          ellm--debug-mode)))
+                          ellm--debug-mode
+                          ellm--prompt-history)))
     (dolist (symbol symbols-to-add)
       (cl-pushnew symbol savehist-additional-variables))))
 
