@@ -35,6 +35,9 @@
   :group 'tools
   :prefix "ellm-")
 
+(defvar ellm--prompt-history nil
+  "Store for prompts history.")
+
 (defcustom ellm-server-port 5040
   "The port to use for the webserver."
   :type 'integer
@@ -366,12 +369,13 @@ See `ellm--add-context-from-region' for usage details.")
   "Set the `SYSTEM-MESSAGE' to use for the next prompt."
   (interactive)
   (let ((sm (or system-message
-                (intern (completing-read "Choose system message: "
-                                 (mapcar
-                                  #'(lambda (cons-message)
-                                      (format
-                                       (propertize (symbol-name (car cons-message)) 'face 'font-lock-string-face)))
-                                       ellm-system-messages))))))
+                (intern (completing-read
+                         "Choose system message: "
+                         (mapcar #'(lambda (cons-message)
+                                     (format
+                                      (propertize (symbol-name (car cons-message))
+                                                  'face 'font-lock-string-face)))
+                                 ellm-system-messages))))))
     (setq ellm-current-system-message sm)
     (message "...system message set to %s..." sm)))
 
@@ -383,8 +387,9 @@ See `ellm--add-context-from-region' for usage details.")
                          "Choose provider: "
                          (mapcar #'(lambda (item)
                                      (format
-                                      (propertize (symbol-name item) 'face 'font-lock-type-face)))
-                                      (ellm--providers-supported))))))
+                                      (propertize (symbol-name item)
+                                                  'face 'font-lock-type-face)))
+                                 (ellm--providers-supported))))))
          (config (ellm--get-provider-configuration p))
          (models-alist (alist-get 'models-alist config)))
     (setq ellm-model (alist-get ellm-model-size models-alist)
@@ -787,9 +792,6 @@ with a non-nil MAYBE-PROMPT argument."
                     filename-suffix
                     ".org"))))
     (find-file-noselect filepath)))
-
-(defvar ellm--prompt-history nil
-  "History list for prompts.")
 
 (defun ellm-chat (&optional current-conversation conversations-buffer next-prompt)
   "Send a request to the current provider's chat completion endpoint.
@@ -1239,7 +1241,7 @@ is temporarily highlighted to indicate they are new messages."
         (with-selected-window (get-buffer-window (current-buffer))
           (goto-char last-user-message-begin)
           (recenter-top-bottom 4)
-          (org-next-visible-heading 1)
+          (ellm-org-next-message)
           (when highlight-last-message
             (save-excursion
               (org-end-of-subtree)
@@ -1511,6 +1513,21 @@ When at the top of the conversation, fold the subtree."
          (doc (funcall documentation-fn (symbol-at-point))))
     (cons symbol doc)))
 
+; TODO Make this more portable by using different search tools as available.
+(defun ellm-search-in-conversations (&optional pattern)
+  "Search for headlines matching `PATTERN' in the conversations files."
+  (interactive)
+  (let ((effective-pattern
+         (or pattern
+             (read-string "Enter search pattern: ")))
+        (files
+         (f-files ellm--conversations-dir
+                  (lambda (f)
+                    (and
+                     (string-prefix-p ellm--conversations-filename-prefix (f-filename f))
+                     (string-suffix-p ".org" (f-filename f)))))))
+    (consult-ripgrep files effective-pattern)))
+
 (defun ellm--describe-symbols (pattern)
   "Describe the Emacs Lisp symbols matching `PATTERN'."
   (interactive "sDescribe symbols matching: ")
@@ -1585,10 +1602,9 @@ Note that `FILENAME' should be an absolute path to the file."
             (define-key map (kbd "C-c ; n") #'ellm-chat)
             (define-key map (kbd "C-c ; e") #'ellm-export-conversation)
             (define-key map (kbd "C-c ; r") #'ellm-org-rate-response-and-refresh)
-            (define-key map (kbd "C-c ; t") #'ellm-toggle-test-mode)
             (define-key map (kbd "C-c ; c") #'ellm-set-config)
             (define-key map (kbd "C-c ; ;") #'ellm-show-conversations-buffer)
-            (define-key map (kbd "C-c ; s") #'ellm-toggle-save-conversations)
+            (define-key map (kbd "C-c ; s") #'ellm-search-in-conversations)
             (define-key map (kbd "C-c ; o") #'ellm-org-fold-conversations-buffer)
             (define-key map (kbd "C-c ; j") #'ellm-org-next-message)
             (define-key map (kbd "C-c ; k") #'ellm-org-previous-message)
