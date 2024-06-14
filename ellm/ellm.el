@@ -191,24 +191,12 @@
   "If non-nil, set LLM parameters to lowest token cost for testing purposes.")
 
 (defvar ellm-org--faces-alist
-  `((rating-5 '(:foreground "gold"))
-    (rating-4 '(:foreground "green"))
-    (rating-3 '(:foreground "yellow"))
-    (rating-2 '(:foreground "orange"))
-    (rating-1 '(:foreground "red")))
+  `(("5" '(:foreground "green1"))
+    ("4" '(:foreground "chartreuse"))
+    ("3" '(:foreground "yellow"))
+    ("2" '(:foreground "orange"))
+    ("1" '(:foreground "OrangeRed")))
   "Faces indicating the user ratings of conversations.")
-
-(defcustom ellm-system-message "You are a useful emacs-integrated general assistant.
-Your goal is to execute the user's task or precisely answer their questions, using all \
-the CONTEXT the user provides (if any).
-You are very cautious and give thorough justifications for each claim that you make.
-When you are not very confident about certain details, you say so and, if it can help, \
-ask the user for clarifications needed for those details.
-You avoid unnecessary politeness formulae and organizational sections. \
-You instead focus on examples and the technical aspects of the subject at hand."
-  "The system message to set the stage for new conversations."
-  :type 'string
-  :group 'ellm)
 
 (defvar ellm--system-message-suffix "\nFinally, you accompany any response with a short title \
 which describes the discussion.
@@ -225,7 +213,8 @@ Format your response in markdown."
   "The system message suffix to append to the system message.")
 
 (defcustom ellm-system-messages
-  `((default . "You are a useful general assistant integrated with Emacs.
+  `((default :type string
+             :value "You are a useful general assistant integrated with Emacs.
 Your goal is to execute the user's task or precisely answer their questions, \
 using all the CONTEXT the user provides (if any).
 Ensure your responses are relevant and adequate based on the nature of the query.
@@ -236,21 +225,24 @@ Avoid unnecessary politeness and organizational sections.
 Instead, focus on providing clear, relevant examples and the technical aspects \
 of the subject at hand.")
 
-    (question-and-answer . "You are an expert technical assistant integrated with Emacs.
+    (question-and-answer :type string
+                         :value "You are an expert technical assistant integrated with Emacs.
 Your primary task is to precisely and accurately answer the user's technical questions.
 When answering, ensure that your responses are directly relevant to the question asked.
 If you are unsure or don't have enough information to provide a confident answer, \
 simply say \"I don't know\" or \"I'm not sure.\"
 Avoid unnecessary politeness details and focus on accuracy and relevance.")
 
-    (code-refactoring . "You are an expert code refactoring assistant integrated with Emacs.
+    (code-refactoring :type string
+                      :value "You are an expert code refactoring assistant integrated with Emacs.
 Your primary task is to assist with improving and optimizing existing code.
 Identify inefficient or outdated code patterns and suggest better alternatives.
 Ensure that the refactored code remains functionally equivalent to the original.
 If there are multiple valid ways to refactor, present the options and recommend the most efficient one.
 Provide clear, concise code samples highlighting the changes.")
 
-    (code-review . "You are an expert code review assistant integrated with Emacs.
+    (code-review :type string
+                 :value "You are an expert code review assistant integrated with Emacs.
 Your primary task is to assist with reviewing code, identifying potential issues, and suggesting improvements.
 Focus on code logic, best practices, performance, and readability.
 Provide constructive feedback, indicating both strengths and areas for improvement.
@@ -258,23 +250,22 @@ Ensure your comments are clear, specific, and actionable.
 Feel free to request additional context or clarifications if necessary.
 Avoid unnecessary politeness and organizational sections like a closing summary.")
 
-    (code-generation . (lambda ()
-                         (format "You are an expert %s programmer integrated with Emacs.
+    (code-generation :type function
+                     :args (:language)
+                     :value (lambda (language)
+                              (format "You are an expert %s programmer integrated with Emacs.
 Your primary task is to assist with code generation, ensuring accuracy and efficiency.
 When generating code, use the provided CONTEXT to tailor your responses to the user's needs.
 Provide well-commented, clean, and efficient code samples.
 If the problem can be solved in multiple ways, briefly state the options and recommend the most efficient one.
 When you encounter incomplete or ambiguous instructions, seek clarifications from the user.
 Maintain a focus on technical precision and completeness without redundant explanations or politeness."
-                                 (when (derived-mode-p 'prog-mode)
-                                   (thread-last (symbol-name major-mode)
-                                                (string-remove-suffix "-mode")
-                                                (string-remove-suffix "-ts")))))))
+                                      language))))
   "Alist mapping system message names to their content.
 The content of those messages are the system messages that will be used as
 instructions for the language models in new conversations."
   :safe #'always
-  :type '(alist :key-type symbol :value-type (choice string function))
+  :type '(alist :key-type symbol :value-type plist)
   :group 'ellm)
 
 (defvar ellm-current-system-message 'default
@@ -337,12 +328,22 @@ See `ellm--add-context-from-region' for usage details.")
                 (models-alist . ,ellm--mistral-models-alist))))
   "Alist mapping providers to their API configurations.")
 
-(defun ellm--get-system-message ()
-  "Get the system message based on `ellm-current-system-message'."
+(defun ellm--get-system-message (&rest args)
+  "Get the system message based on `ellm-current-system-message'.
+
+The `ARGS' should be keyword arguments corresponding to the signature of the
+system message function, if there are any."
   (unless ellm--test-mode
-    (let* ((system-message (alist-get ellm-current-system-message ellm-system-messages))
+    (let* ((message-entry (alist-get ellm-current-system-message ellm-system-messages))
+           (message-type (plist-get message-entry :type))
            (effective-system-message
-            (if (functionp system-message) (funcall system-message) system-message)))
+            (cond
+             ((eq message-type 'function)
+              (let ((func (plist-get message-entry :value))
+                    (arg-keys (plist-get message-entry :args)))
+                (apply func (mapcar (lambda (key) (plist-get args key)) arg-keys))))
+             ((eq message-type 'string)
+              (plist-get message-entry :value)))))
       (concat effective-system-message ellm--system-message-suffix))))
 
 (defun ellm--get-provider-configuration (provider)
@@ -607,6 +608,9 @@ When togling off, restore the previously set values."
           ellm-provider (plist-get model-properties :provider)
           ellm-model-size (plist-get model-properties :size))))
 
+(defvar ellm-context nil
+  "The context to use for the next prompt.")
+
 (defvar ellm--major-mode-to-org-lang-alist
   '((python-ts-mode . "python")
     (python-mode . "python")
@@ -619,55 +623,138 @@ When togling off, restore the previously set values."
     (sh-mode . "shell"))
   "Alist mapping major modes to Org mode source block languages.")
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; CONSTRUCTING CONTEXT BEGIN ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defvar ellm-context-buffer "*ellm-context*"
+  "Name of temporary buffer to use for accumulating prompt context.")
+
+(defun ellm-context-capture-region ()
+  "Capture the currently active region and append it to the ellm-context-buffer."
+  (interactive)
+  (when (and (region-active-p) (not (string= (buffer-name) ellm-context-buffer)))
+    (let ((region-text (buffer-substring (region-beginning) (region-end))))
+      (with-current-buffer (get-buffer-create ellm-context-buffer)
+        (goto-char (point-max))
+        (insert region-text "\n")))))
+
+(defun ellm-context-cancel ()
+  "Cancel the current ellm-build-context process."
+  (interactive)
+  (remove-hook 'activate-mark-hook 'ellm-context-capture-region)
+  (when (get-buffer ellm-context-buffer)
+    (kill-buffer ellm-context-buffer))
+  (winner-undo))
+
+(defun ellm-context-send ()
+  "Complete the ellm-build-context process.
+This sends the accumulated context and user message."
+  (interactive)
+  (let ((context (buffer-substring (point-min) (ellm-context-message-position)))
+        (message (buffer-substring (ellm-context-message-position) (point-max))))
+    (ellm-context-cancel)
+    (ellm-send-prompt context message)))
+
+(defun ellm-context-message-position ()
+  "Return the position where the user message input should begin."
+  (save-excursion
+    (goto-char (point-min))
+    (re-search-forward "^# Your Message:$")
+    (forward-line)
+    (point)))
+
+(defun ellm-build-context ()
+  "Begin a process to incrementally build context for an ellm prompt.
+Marked regions of text will be accumulated in a temporary buffer,
+which will be updated to display the full prompt. The process is
+completed with `C-c C-c` or cancelled with `C-c C-k`."
+  (interactive)
+  (winner-mode)
+  (let ((context-buffer (get-buffer-create ellm-context-buffer)))
+    (with-current-buffer context-buffer
+      (erase-buffer)
+      (insert "# Please mark regions of text to accumulate context for your prompt.\n"
+              "# Each marked region will be appended below.\n"
+              "# Enter your message at the prompt below the accumulated context.\n"
+              "# Hit C-c C-c to complete and send the prompt, or C-c C-k to cancel.\n\n")
+      (insert "# Accumulated Context:\n\n")
+      (insert "\n# Your Message:\n\n")
+      (local-set-key (kbd "C-c C-c") 'ellm-context-send)
+      (local-set-key (kbd "C-c C-k") 'ellm-context-cancel))
+    (pop-to-buffer context-buffer)
+    (goto-char (ellm-context-message-position))
+    (add-hook 'activate-mark-hook 'ellm-context-capture-region)))
+
+(defun ellm-send-prompt (context message)
+  "Send the accumulated CONTEXT and user MESSAGE to the language model.
+Display the result in a new buffer."
+  (let ((prompt (concat context message)))
+    (ellm-send-to-model prompt)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; CONSTRUCTING CONTEXT END ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defun ellm--add-context-from-region (prompt)
   "Use the active region if any to attach context to the `PROMPT' string.
-Use the `ellm-context-fmt-string' template to add context from that region
-in the form of a markdown code block.
+Use the `ellm-prompt-context-fmt-string' template to add context from that
+region in the form of a markdown code block.
 To determine the language label of the code block,
 a lookup to `ellm--major-mode-to-org-lang-alist' with the buffer's major mode
-is used except for the special case of `org-mode'.
-If the buffer's major mode is `org-mode' and a region within an org code
-block is marked, use the source block's language."
+is used, except for the special case of `org-mode' where we use the
+function `ellm--add-context-from-region-org' (which see)."
   (if (use-region-p)
-    (let* ((r-beg (region-beginning))
-           (r-end (region-end))
-           (mode major-mode)
-           (lang (or (alist-get mode ellm--major-mode-to-org-lang-alist "text")))
-           (string-template
-            (if (eq ellm-provider 'anthropic)
-                ellm-prompt-context-fmt-string-anthropic
-              ellm-prompt-context-fmt-string)))
-      (deactivate-mark)
-      (when (eq mode 'org-mode)
+      (let* ((r-beg (region-beginning))
+             (r-end (region-end))
+             (mode major-mode)
+             (lang (alist-get mode ellm--major-mode-to-org-lang-alist
+                              "text" nil 'string=))
+             (string-template
+              (if (eq ellm-provider 'anthropic)
+                  ellm-prompt-context-fmt-string-anthropic
+                ellm-prompt-context-fmt-string)))
+        (deactivate-mark)
         (save-excursion
           (goto-char r-beg)
-          (let* ((el (org-element-at-point-no-context))
-                 (el-beg (org-element-property :begin el))
-                 (el-end (org-element-property :end el)))
-            (when (and (eq (org-element-type el) 'src-block)
-                       (<= el-beg r-beg)
-                       (>= el-end r-end))
-              (progn
-                (setq lang (org-element-property :language el))
-                (let ((cmp-lines
-                       (lambda (op p q)
-                         (let ((p-line (progn (goto-char p)
-                                              (line-number-at-pos)))
-                               (q-line (progn (goto-char q)
-                                              (line-number-at-pos))))
-                           (funcall op p-line q-line)))))
-                  (when (funcall cmp-lines #'= r-beg el-beg)
-                    (goto-char el-beg)
-                    (setq r-beg (+ (line-end-position) 1)))
-                  (goto-char (- el-end (+ (org-element-property :post-blank el) 1)))
-                  (goto-char (line-beginning-position))
-                  (when (<= (point) r-end)
-                    (setq r-end (- (point) 1)))))))))
-      (format string-template
-              lang
-              (buffer-substring-no-properties r-beg r-end)
-              prompt))
-      prompt))
+          (setq r-beg (pos-bol))
+          (goto-char r-end)
+          (setq r-end (pos-eol)))
+        (when (eq mode 'org-mode)
+          (let ((adjusted-values
+                 (ellm--add-context-from-region-org r-beg r-end lang)))
+            (setq r-beg (nth 0 adjusted-values)
+                  r-end (nth 1 adjusted-values)
+                  lang (nth 2 adjusted-values))))
+        (format string-template
+                lang (buffer-substring-no-properties r-beg r-end) prompt))
+    prompt))
+
+(defun ellm--add-context-from-region-org (r-beg r-end lang)
+  "Special context function for `ellm-org' buffers.
+Considering the region between `R-BEG' and `R-END', if it is
+within a code block, use the code block's language instead
+of `LANG'. Adjust the region to the body of the code block if needed.
+This function returns a list of the form (R-BEG R-END LANG) with
+the possibly adjusted values."
+  (save-excursion
+    (goto-char r-beg)
+    (let* ((element (org-element-at-point-no-context))
+           (element-begin (org-element-property :begin element))
+           (element-end (org-element-property :end element)))
+      (when (and (eq (org-element-type element) 'src-block)
+                 (<= element-begin r-beg)
+                 (>= element-end r-end))
+        (progn
+          (setq lang (org-element-property :language element))
+          (let ((region-begin-at-block-begin-p
+                 (= (line-number-at-pos r-beg) (line-number-at-pos element-begin))))
+            (when region-begin-at-block-begin-p
+              (goto-char element-begin)
+              (setq r-beg (+ (line-end-position) 1)))
+            (goto-char (- element-end (+ (org-element-property :post-blank element) 1)))
+            (goto-char (line-beginning-position))
+            (when (<= (point) r-end)
+              (setq r-end (- (point) 1))))))))
+  (list r-beg r-end lang))
 
 (defun ellm--make-message (role content)
   "Create a message with the given `ROLE' and `CONTENT'."
@@ -695,13 +782,19 @@ block is marked, use the source block's language."
 
 Return the conversation-data alist."
   (let* ((contextualized-prompt (ellm--add-context-from-region prompt))
-         (user-message (ellm--make-message :user contextualized-prompt)))
+         (user-message (ellm--make-message :user contextualized-prompt))
+         (system-message-args
+          (when (derived-mode-p 'prog-mode)
+            (list :language
+                  (thread-last (symbol-name major-mode)
+                               (string-remove-suffix "-mode")
+                               (string-remove-suffix "-ts"))))))
     `((messages . (,user-message))
       (temperature . ,ellm-temperature)
       (max_tokens . ,ellm-max-tokens)
       (model . ,ellm-model)
       (title . nil)
-      (system . ,(ellm--get-system-message)))))
+      (system . ,(ellm--get-system-message system-message-args)))))
 
 (defun ellm--prepare-request-headers (conversation)
   "Prepare the API call body to send `CONVERSATION'."
@@ -996,7 +1089,7 @@ This function is meant to be used with the response from the OpenAI API."
 (defun ellm--add-or-update-title (title conversation)
   "Add or update the `TITLE' in the `CONVERSATION'.
 
-A generic `Untitled [TIMESTAMP]' title is used if `TITLE' is nil."
+A generic `Untitled  [TIMESTAMP]' title is used if `TITLE' is nil."
   (let* ((previous-title (alist-get 'title conversation))
          (new-title (or title previous-title)))
     (setf (alist-get 'title conversation)
@@ -1006,19 +1099,13 @@ A generic `Untitled [TIMESTAMP]' title is used if `TITLE' is nil."
   "Split the `RESPONSE-CONTENT' around a markdown horizontal rule.
 
 When response comes in the form of
-
 \"TITLE
 ---
 CONTENT\"
-
 this returns both components as the list
-
 `(\"TITLE\" \"CONTENT\")'
-
 When no horizontal rule is found, it sets the title as nil:
-
 `(nil RESPONSE-CONTENT)'.
-
 Note that both components are trimmed of whitespace."
   (let* ((res (string-split
                response-content
@@ -1043,16 +1130,9 @@ Use `HEADLINE-CHAR' as the character for headlines."
 (defun ellm--stringify-message (message &optional headline-char)
   "Convert the `MESSAGE' to a string.
 
-A message of the form
-
-  `((role . :role) (content . \"content\"))'
-
-is converted to the string
-
-  \"[HC] Role
-     content\"
-
-where [HC] is `HEADLINE-CHAR' or \"#\" by default."
+A message of the form `((role . :role) (content . \"content\"))'
+is converted to the string \"[HC] Role\ncontent\" where [HC]
+is `HEADLINE-CHAR' or \"#\" by default."
   (let* ((role (capitalize (substring (symbol-name (alist-get 'role message)) 1)))
          (content (alist-get 'content message))
          (hc (or headline-char "#")))
@@ -1089,7 +1169,8 @@ will be inserted at the top of the document."
     (ellm-chat conversation buffer prompt)))
 
 (defun ellm--conversation-subtree ()
-  "Return the current conversation subtree."
+  "Return the current conversation subtree.
+The returned object is an org parse tree."
   (save-restriction
     (progn
       (org-narrow-to-subtree)
@@ -1136,8 +1217,10 @@ will be inserted at the top of the document."
 (defun ellm-org--message-at-point ()
   "Captures the current message as a string.
 It is assumed that the point is located at the beginning of a message."
-  (let ((role (intern (concat ":" (downcase (org-element-property
-                                             :raw-value
+  (let ((role
+         (intern
+          (concat ":" (downcase
+                       (org-element-property :raw-value
                                              (org-element-at-point-no-context))))))
         (content
          (save-excursion
@@ -1149,21 +1232,29 @@ It is assumed that the point is located at the beginning of a message."
              (buffer-substring-no-properties (point) (point-max))))))
     `((role . ,role) (content . ,(s-trim content)))))
 
-(defun ellm-org--at-headline-level-p (level)
-  "Check if the point is at a headline of the given `LEVEL'."
-  (and (org-at-heading-p)
-       (= (org-element-property :level (org-element-at-point-no-context)) level)))
+(defun ellm-org--at-headline-level-p (level &optional posn)
+  "Check if the point is at a headline of the given `LEVEL'.
 
-(defun ellm--org-plain-text (org-element)
-  "Get the plain text content of the given `ORG-ELEMENT'."
+If `POSN' is nil, the current point is used."
+  (save-excursion
+    (goto-char (or posn (point)))
+    (and (org-at-heading-p)
+         (= (org-element-property :level (org-element-at-point-no-context)) level))))
+
+(defun ellm-org--plain-text (data)
+  "Get the plain text content of the given org `DATA'.
+The `DATA' must be as the data accepted by `org-element-interpret-data'
+\(which see\)."
   (with-temp-buffer
     (insert (org-element-interpret-data org-element))
     (s-trim (buffer-substring-no-properties (point-min) (point-max)))))
 
 (defun ellm--conversations-buffer-p (buffer)
   "Check if the `BUFFER' is an ellm conversations buffer.
-This could either be the `ellm--temp-conversations-buffer-name' or a buffer
-visiting a file in `ellm--conversations-dir' with name starting with
+This could either be the buffer determined
+by `ellm--temp-conversations-buffer-name', or a buffer visiting one
+of the conversations files. The conversations files are those org files
+in the `ellm--conversations-dir' directory, with filename starting with
 the `ellm--conversations-filename-prefix' prefix."
   (or (equal (buffer-name) ellm--temp-conversations-buffer-name)
       (with-current-buffer buffer
@@ -1174,14 +1265,19 @@ the `ellm--conversations-filename-prefix' prefix."
                           (f-filename (buffer-file-name (current-buffer))))))))
 
 (defun ellm--point-at-conversation-p ()
-  "Return non-nil if point is within a conversation subtree."
+  "Return non-nil if point is within a conversation subtree.
+The current buffer needs to be either one of the org conversations
+files or the temporary conversations buffer."
   (and
    (derived-mode-p 'org-mode)
    (ellm--conversations-buffer-p (current-buffer))
    (not (org-before-first-heading-p))))
 
 (defun ellm--at-temp-conversations-buffer-p ()
-  "Check if the current buffer is `ellm--temp-conversations-buffer-name'."
+  "Check if the current buffer is the temporary conversations buffer.
+That buffer's is set by the value of `ellm--temp-conversations-buffer-name'.
+This is the buffer used to output conversations when `ellm--test-mode'
+is toggle on."
   (equal (buffer-name) ellm--temp-conversations-buffer-name))
 
 (defun ellm-chat-at-point (&optional prompt)
@@ -1232,21 +1328,24 @@ is temporarily highlighted to indicate they are new messages."
     (org-fold-show-subtree)
     (if-let* ((headlines
                (org-element-map (ellm--conversation-subtree) 'headline 'identity))
-              (last-user-message
+              (last-assistant-message
                (cl-find-if
-                (lambda (hl) (string-match-p "User" (org-element-property :raw-value hl)))
+                (lambda (hl) (string-match-p "Assistant" (org-element-property :raw-value hl)))
                 headlines :from-end t))
               (last-user-message-begin
-               (org-element-property :begin last-user-message)))
+               (org-element-property :begin last-assistant-message)))
         (with-selected-window (get-buffer-window (current-buffer))
           (goto-char last-user-message-begin)
           (recenter-top-bottom 4)
-          (ellm-org-next-message)
           (when highlight-last-message
             (save-excursion
               (org-end-of-subtree)
               (pulse-momentary-highlight-region last-user-message-begin (point)))))
       (message "Last user message not found"))))
+
+(defun ellm--display-conversations-buffer-again (buffer)
+  "Function to display the conversations in `BUFFER' after it is open."
+  )
 
 (defun ellm-show-conversations-buffer (&optional buffer)
   "Show the conversations `BUFFER'.
@@ -1272,33 +1371,28 @@ unless `BUFFER' is non-nil in which case that buffer is used."
 
 (defun ellm--goto-conversation-top ()
     "Go to the top of the current conversation in the current buffer.
-
 This function navigates to the top-level headline (level 1) of the
 current conversation. It first checks if the point is within a
 conversation, and if not, it throws an error. It then uses
 `org-element-lineage' to get all the ancestors of the element at
 point and, if found, moves the point to the first headline of
 level 1 found.
-
 This function is more reliable than using `org-back-to-header' or
 `org-up-heading-safe' to navigate the document structure, as it will
 work even if the headline levels are not singly incremented.
-
 Returns the resulting POINT if the point is moved to the top of the
 conversation, or throws an error otherwise."
   (unless (ellm--point-at-conversation-p)
     (user-error "Point is not within a conversation"))
-  (unless (looking-at-p "^\\* ")
-    (if-let* ((top-headline-p
-               (lambda (el) (and (eq 'headline (org-element-type el))
-                                 (eql 1 (org-element-property :level el)))))
-              (ancestors (org-element-lineage (org-element-at-point)))
-              (top-headline
-               (cl-find-if top-headline-p
-                           ancestors
-                           :from-end)))
+  (if-let* ((ancestors (org-element-lineage (org-element-at-point-no-context) nil t))
+            (top-headline
+             (cl-find-if (lambda (hl)
+                           (ellm-org--at-headline-level-p
+                            1 (org-element-property :begin hl)))
+                         ancestors
+                         :from-end)))
         (goto-char (org-element-property :begin top-headline))
-      (error "No top-level headline found"))))
+      (error "No top-level headline found")))
 
 (defun ellm--goto-first-top-level-heading ()
   "Move the point to the first top-level heading in the current buffer.
@@ -1424,50 +1518,39 @@ Will call `json-encode' on `DATA' if
     (ellm--log org-string
                "MESSAGES-FOR-ORG-MODE" t)))
 
-(defun ellm--org-rate-response (rating)
-  "Rate the current org headline with a RATING."
-  (interactive "sRate the conversation (1-5): ")
-  (unless (ellm--point-at-conversation-p)
-    (user-error "Point is not within a conversation"))
-  (let ((valid-ratings '("1" "2" "3" "4" "5")))
-    (if (member rating valid-ratings)
-        (progn
-          (read-only-mode -1)
-          (save-excursion
-            (ellm--goto-conversation-top)
-            (org-set-property "RATING" rating))
-          (read-only-mode +1)
-          (save-buffer))
-      (error "Invalid rating. Please enter a value between 1 and 5"))))
-
-(defun ellm--org-apply-rating-face ()
+(defun ellm-org--apply-rating-face ()
   "Apply custom face to org headlines based on their RATING property."
   (save-excursion
     (goto-char (point-min))
     (while (re-search-forward "^\\* " nil t)
-      (when-let ((rating (org-entry-get (point) "RATING")))
-        (let ((face (pcase (string-to-number rating)
-                      ((pred (lambda (r) (assoc r ellm-org--faces-alist)))
-                       (cdr (assoc (string-to-number rating) ellm-org--faces-alist)))
-                      (_ nil))))
-          (when face
-            (let ((title-begin (line-beginning-position))
-                  (title-end (re-search-forward "  " nil t)))
-              (remove-overlays title-begin title-end 'ellm-rating t)
-              (let ((ov (make-overlay title-begin title-end)))
-                (overlay-put ov 'ellm-rating t)
-                (overlay-put ov 'face face)))))))))
+      (when-let* ((rating (org-entry-get (point) "RATING"))
+                  (face (alist-get rating ellm-org--faces-alist nil nil 'equal))
+                  (title-begin (line-beginning-position))
+                  (title-end (re-search-forward org-element--timestamp-regexp nil t)))
+        (remove-overlays title-begin title-end 'ellm-rating t)
+        (let ((ov (make-overlay title-begin title-end)))
+          (overlay-put ov 'ellm-rating t)
+          (overlay-put ov 'face face))))))
 
-(defun ellm-org-rate-response-and-refresh (rating)
+(defun ellm-org-rate-response-and-refresh (&optional rating)
   "Rate the current org headline with a RATING and apply the corresponding face."
-  (interactive "sRate the conversation (1-5): ")
-  (ellm--org-rate-response rating)
-  (org-redisplay-inline-images)
-  (save-restriction
-    (save-excursion
-      (ellm--goto-conversation-top)
+  (interactive)
+  (unless (ellm--point-at-conversation-p)
+    (user-error "Point is not within a conversation"))
+  (if rating
+      (progn
+        (when (numberp rating)
+          (setq rating (number-to-string rating)))
+        (unless (member rating (mapcar 'car ellm-org--faces-alist))
+      (error "Invalid rating. Please enter a value between 1 and 5")))
+    (setq rating (completing-read "Rate the conversation (1-5): " '(1 2 3 4 5))))
+  (save-excursion
+    (ellm--goto-conversation-top)
+    (org-set-property "RATING" rating)
+    (save-buffer)
+    (save-restriction
       (org-narrow-to-element)
-      (ellm--org-apply-rating-face))))
+      (ellm-org--apply-rating-face))))
 
 (defun ellm-org-fold-conversations-buffer ()
   "Fold all conversations in the `ellm--conversations-file'."
@@ -1592,6 +1675,49 @@ Note that `FILENAME' should be an absolute path to the file."
           (openai-api-key (funcall ellm-get-openai-api-key)))
       (setenv "OPENAI_API_KEY" openai-api-key)
       (start-process "ellm-server" "*ellm-server*" "node" "server/server.js"))))
+
+(defvar ellm-context-collection-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") 'ellm-context-collection-complete)
+    (define-key map (kbd "C-c C-k") 'ellm-context-collection-cancel)
+    map)
+  "Keymap for `ellm-context-collection-mode'.")
+
+(defun ellm-context-collection-add-region ()
+  "Add the current region to the context collection buffer."
+  (interactive)
+  (if (use-region-p)
+      (let ((region-content (buffer-substring-no-properties (region-beginning) (region-end))))
+        (with-current-buffer ellm-context-collection-buffer
+          (goto-char (point-max))
+          (insert region-content "\n\n"))
+        (deactivate-mark))
+    (message "No active region to add.")))
+
+(defun ellm-context-collection-complete ()
+  "Finalize the context collection and insert it into the prompt."
+  (interactive)
+  (let ((context (with-current-buffer ellm-context-collection-buffer
+                   (buffer-string))))
+    (ellm--add-context-from-region context)
+    (ellm-context-collection-mode -1)))
+
+(defun ellm-context-collection-cancel ()
+  "Cancel the context collection."
+  (interactive)
+  (ellm-context-collection-mode -1)
+  (kill-buffer ellm-context-collection-buffer))
+
+(define-minor-mode ellm-context-collection-mode
+  "Minor mode for collecting context from multiple regions."
+  :lighter " Ellm-Collect"
+  :keymap ellm-context-collection-mode-map
+  (if ellm-context-collection-mode
+      (progn
+        (get-buffer-create ellm-context-collection-buffer)
+        (with-current-buffer ellm-context-collection-buffer
+          (erase-buffer)))
+    (kill-buffer ellm-context-collection-buffer)))
 
 ;;;###autoload
 (define-minor-mode ellm-mode
