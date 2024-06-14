@@ -1321,7 +1321,7 @@ is temporarily highlighted to indicate they are new messages."
     (error "Buffer is not a conversations buffer"))
   (with-current-buffer buffer
     (display-buffer (current-buffer))
-    (ellm--org-apply-rating-face)
+    (ellm-org--apply-rating-face)
     (read-only-mode 1)
     (org-overview)
     (ellm--goto-first-top-level-heading)
@@ -1342,10 +1342,6 @@ is temporarily highlighted to indicate they are new messages."
               (org-end-of-subtree)
               (pulse-momentary-highlight-region last-user-message-begin (point)))))
       (message "Last user message not found"))))
-
-(defun ellm--display-conversations-buffer-again (buffer)
-  "Function to display the conversations in `BUFFER' after it is open."
-  )
 
 (defun ellm-show-conversations-buffer (&optional buffer)
   "Show the conversations `BUFFER'.
