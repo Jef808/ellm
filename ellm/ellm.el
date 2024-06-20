@@ -629,6 +629,101 @@ When togling off, restore the previously set values."
     (sh-mode . "shell"))
   "Alist mapping major modes to Org mode source block languages.")
 
+(defvar ellm-context-buffer "*ellm-context*"
+  "Name of temporary buffer to use for accumulating prompt context.")
+
+(defun ellm-context-capture-region ()
+  "Capture the currently active region and append it to the ellm-context-buffer."
+  (interactive)
+  (when (and (region-active-p) (not (string= (buffer-name) ellm-context-buffer)))
+    (let ((region-text (buffer-substring (region-beginning) (region-end))))
+      (with-current-buffer (get-buffer-create ellm-context-buffer)
+        (goto-char (point-max))
+        (insert region-text "\n")))))
+
+(defun ellm-context-collection-cancel ()
+  "Cancel the current ellm-build-context process."
+  (interactive)
+  (remove-hook 'activate-mark-hook 'ellm-context-capture-region)
+  (when (get-buffer ellm-context-buffer)
+    (kill-buffer ellm-context-buffer))
+  (winner-undo))
+
+(defun ellm-context-collection-complete ()
+  "Complete the ellm-context-collection procedure.
+This saves the collected context."
+  (interactive)
+  (let ((context-begin
+         (save-excursion
+           (goto-char (point-min))
+           (re-search-forward "^# Accumulated Context:")
+           (forward-line)
+           (point))))
+    (setq ellm-context (buffer-substring-no-properties context-begin (point-max)))
+    (ellm-context-collection-cancel)))
+
+(defun ellm-context-message-position ()
+  "Return the position where the user message input should begin."
+  (save-excursion
+    (goto-char (point-min))
+    (re-search-forward "^# Accumulated Context:")
+    (forward-line)
+    (point)))
+
+(defvar ellm-context-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") 'ellm-context--send)
+    (define-key map (kbd "C-c C-k") 'ellm-context--cancel)
+    map)
+  "Keymap for `ellm-build-context'.")
+
+(defun ellm-build-context ()
+  "Initialize and manage a context-building buffer for an ELLM prompt.
+
+This function sets up an interactive environment to accumulate context
+from marked regions of text within Emacs. It leverages `winner-mode` to
+manage window configurations and creates or switches to a dedicated
+buffer for context accumulation. The buffer is initialized with
+instructions and placeholders for user input.
+
+Key features:
+- Activates `winner-mode` to save and restore window configurations.
+- Creates or reuses a buffer named by `ellm-context-buffer` for
+context accumulation.
+- Clears the buffer and inserts instructional text and placeholders for
+context and user message.
+- Sets up a local keymap `ellm-context-map` for buffer-specific
+keybindings.
+- Displays the context buffer and moves the cursor to the message input
+position.
+- Adds a hook `activate-mark-hook` to capture and append marked regions to
+the context.
+
+Usage:
+1. Mark regions of text in any buffer to include in the context.
+2. Switch to the context buffer, enter your message below the accumulated
+context.
+3. Use \\<ellm-context-map>\\[ellm-context--send] to send the prompt
+ or \\<ellm-context-map>\\[ellm-context--cancel] to cancel.
+
+This function is intended to streamline the process of gathering and using
+contextual information for prompts, enhancing the efficiency of interactive
+workflows in Emacs."
+  (interactive)
+  (winner-mode)
+  (let ((context-buffer (get-buffer-create ellm-context-buffer)))
+    (with-current-buffer context-buffer
+      (erase-buffer)
+      (insert "# Please mark regions of text to accumulate context for your prompt.\n"
+              "# Each marked region will be appended below.\n"
+              "# Enter your message at the prompt below the accumulated context.\n"
+              "# Hit C-c C-c to complete and send the prompt, or C-c C-k to cancel.\n\n")
+      (insert "# Accumulated Context:\n\n")
+      (use-local-map ellm-context-map))
+    (pop-to-buffer context-buffer)
+    (goto-char (ellm-context-message-position))
+    (add-hook 'activate-mark-hook 'ellm-context-capture-region)))
+
 (defun ellm--add-context-from-region (prompt)
   "Use the active region if any to attach context to the `PROMPT' string.
 Use the `ellm-prompt-context-fmt-string' template to add context from that
