@@ -22,7 +22,7 @@
 (require 'ert)
 (require 'ellm)
 
-(ert-deftest test-ellm-org--single-user-message-at-point ()
+(ert-deftest ellm-org-test--single-user-message-at-point ()
   (with-temp-buffer
     (org-mode)
     (insert "** User\nExample user message.")
@@ -32,7 +32,7 @@
       (should (equal expected actual)))))
 
 
-(ert-deftest test-ellm-org--single-assistant-message-at-point-with-property-drawer ()
+(ert-deftest ellm-org-test--single-assistant-message-at-point-with-property-drawer ()
     (with-temp-buffer
       (org-mode)
       (insert "** Assistant\n:PROPERTIES:\n:CUSTOM_ID: assistant\n:END:\nExample assistant message.")
@@ -41,10 +41,10 @@
             (actual (ellm-org--message-at-point)))
         (should (equal actual expected)))))
 
-(ert-deftest test-ellm-org--get-conversation-messages ()
-  (let ((test-data `(("data/conversation-1.org" . ,test-ellm-org--conversation-messages-1)
-                     ("data/conversation-2.org" . ,test-ellm-org--conversation-messages-2)
-                     ("data/conversation-3.org" . ,test-ellm-org--conversation-messages-3))))
+(ert-deftest ellm-org-test--get-conversation-messages ()
+  (let ((test-data `(("data/conversation-1.org" . ,ellm-org-test--conversation-messages-1)
+                     ("data/conversation-2.org" . ,ellm-org-test--conversation-messages-2)
+                     ("data/conversation-3.org" . ,ellm-org-test--conversation-messages-3))))
     (dolist (data test-data)
       (with-current-buffer (find-file-noselect (car data))
         (should (messages-equal-p
@@ -59,7 +59,7 @@
                         (string= (s-trim (alist-get 'content msg1)) (s-trim (alist-get 'content msg2)))))
                  msgs1 msgs2)))
 
-(defvar test-ellm-org--conversation-messages-1
+(defvar ellm-org-test--conversation-messages-1
   (list
    `((role . :user)
      (content . "*** CONTEXT:
@@ -100,7 +100,7 @@ for (initialization; condition; increment) {
 #+end_src")))
   "A string containing a few conversations for testing purposes.")
 
-(defvar test-ellm-org--conversation-messages-2
+(defvar ellm-org-test--conversation-messages-2
   (list
    `((role . :user)
      (content . "Can you explain the components of an HTTP request?"))
@@ -131,7 +131,7 @@ for (initialization; condition; increment) {
 4. An optional message body")))
   "A string containing a few conversations for testing purposes.")
 
-(defvar test-ellm-org--conversation-messages-3
+(defvar ellm-org-test--conversation-messages-3
   (list
    `((role . :user)
      (content . "What are some common HTTP status codes?"))
@@ -156,4 +156,4 @@ For more information, visit [[https://developer.mozilla.org/en-US/docs/Web/HTTP/
 | 302  | Found (Temporary Redirect) | The URI of the requested resource has been changed temporarily. |")))
   "A string containing a few conversations for testing purposes.")
 
-;;; test-ellm-org.el ends here
+;;; ellm-org-test.el ends here

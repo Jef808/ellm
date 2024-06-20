@@ -22,7 +22,7 @@
 (require 'ert)
 (require 'ellm)
 
-(ert-deftest ellm--test-add-context-from-region-no-region ()
+(ert-deftest ellm-test--add-context-from-region-no-region ()
   "Test `ellm--add-context-from-region` without an active region."
   (with-temp-buffer
     (insert "Some text that won't be included as context.")
@@ -30,29 +30,27 @@
       (should (equal (ellm--add-context-from-region prompt)
                      prompt)))))
 
-(ert-deftest ellm--add-context-from-region-active-region-non-org-mode ()
+(ert-deftest ellm-test--add-context-from-region-active-region-non-org-mode ()
   (with-temp-buffer
     (emacs-lisp-mode)
     (insert "Some elisp code")
     (set-mark (point-min))
     (goto-char (point-max))
     (let* ((prompt "A prompt.")
-           (expected-context (format ellm-prompt-context-fmt-string "emacs-lisp" "Some elisp code"))
-           (expected-result (concat expected-context prompt)))
+           (expected-result (format ellm-prompt-context-fmt-string "emacs-lisp" "Some elisp code" prompt)))
       (should (equal (ellm--add-context-from-region prompt) expected-result)))))
 
-(ert-deftest ellm--add-context-from-region-active-region-org-mode-not-in-src-block ()
+(ert-deftest ellm-test--add-context-from-region-active-region-org-mode-not-in-src-block ()
   (with-temp-buffer
     (org-mode)
     (insert "Some text in org mode")
     (set-mark (point-min))
     (goto-char (point-max))
     (let* ((prompt "A prompt.")
-           (expected-context (format ellm-prompt-context-fmt-string "org" "Some text in org mode"))
-           (expected-result (concat expected-context prompt)))
+           (expected-result (format ellm-prompt-context-fmt-string "org" "Some text in org mode" prompt)))
       (should (equal (ellm--add-context-from-region prompt) expected-result)))))
 
-(ert-deftest ellm--add-context-from-region-active-region-org-mode-in-src-block ()
+(ert-deftest ellm-test--add-context-from-region-active-region-org-mode-in-src-block ()
   (with-temp-buffer
     (org-mode)
     (let* ((code-content "print('Hello, world!')")
@@ -63,11 +61,10 @@
       (set-mark (point))
       (search-forward "world!')")
       (let* ((prompt "A prompt.")
-             (expected-context (format ellm-prompt-context-fmt-string "python" code-content))
-             (expected-result (concat expected-context prompt)))
+             (expected-result (format ellm-prompt-context-fmt-string "python" code-content prompt)))
         (should (equal (ellm--add-context-from-region prompt) expected-result))))))
 
-(ert-deftest ellm--add-context-from-region-active-region-org-mode-overlapping-src-block ()
+(ert-deftest ellm-test--add-context-from-region-active-region-org-mode-overlapping-src-block ()
   (with-temp-buffer
     (org-mode)
     (let ((content "#+BEGIN_SRC python\nprint('Hello, world!')\n#+END_SRC\n\nSome text"))
@@ -75,8 +72,7 @@
       (set-mark (point-min))
       (goto-char (point-max))
       (let* ((prompt "A prompt.")
-             (expected-context (format ellm-prompt-context-fmt-string "org" content))
-             (expected-result (concat expected-context prompt)))
+             (expected-result (format ellm-prompt-context-fmt-string "org" content prompt)))
         (should (equal (ellm--add-context-from-region prompt) expected-result))))))
 
 ;;; test-context-from-region.el ends here
