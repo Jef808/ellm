@@ -22,6 +22,7 @@
 (require 'f)
 (require 'json)
 (require 'project)
+(require 'request)
 (require 'markdown-mode)
 (require 'org-element)
 (require 'org-fold)
@@ -37,6 +38,11 @@
 
 (defvar ellm--prompt-history nil
   "Store for prompts history.")
+
+(defcustom ellm-server-host "localhost"
+  "The host to use for the webserver."
+  :type 'string
+  :group 'ellm)
 
 (defcustom ellm-server-port 5040
   "The port to use for the webserver."
@@ -623,77 +629,6 @@ When togling off, restore the previously set values."
     (sh-mode . "shell"))
   "Alist mapping major modes to Org mode source block languages.")
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; CONSTRUCTING CONTEXT BEGIN ;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defvar ellm-context-buffer "*ellm-context*"
-  "Name of temporary buffer to use for accumulating prompt context.")
-
-(defun ellm-context-capture-region ()
-  "Capture the currently active region and append it to the ellm-context-buffer."
-  (interactive)
-  (when (and (region-active-p) (not (string= (buffer-name) ellm-context-buffer)))
-    (let ((region-text (buffer-substring (region-beginning) (region-end))))
-      (with-current-buffer (get-buffer-create ellm-context-buffer)
-        (goto-char (point-max))
-        (insert region-text "\n")))))
-
-(defun ellm-context-cancel ()
-  "Cancel the current ellm-build-context process."
-  (interactive)
-  (remove-hook 'activate-mark-hook 'ellm-context-capture-region)
-  (when (get-buffer ellm-context-buffer)
-    (kill-buffer ellm-context-buffer))
-  (winner-undo))
-
-(defun ellm-context-send ()
-  "Complete the ellm-build-context process.
-This sends the accumulated context and user message."
-  (interactive)
-  (let ((context (buffer-substring (point-min) (ellm-context-message-position)))
-        (message (buffer-substring (ellm-context-message-position) (point-max))))
-    (ellm-context-cancel)
-    (ellm-send-prompt context message)))
-
-(defun ellm-context-message-position ()
-  "Return the position where the user message input should begin."
-  (save-excursion
-    (goto-char (point-min))
-    (re-search-forward "^# Your Message:$")
-    (forward-line)
-    (point)))
-
-(defun ellm-build-context ()
-  "Begin a process to incrementally build context for an ellm prompt.
-Marked regions of text will be accumulated in a temporary buffer,
-which will be updated to display the full prompt. The process is
-completed with `C-c C-c` or cancelled with `C-c C-k`."
-  (interactive)
-  (winner-mode)
-  (let ((context-buffer (get-buffer-create ellm-context-buffer)))
-    (with-current-buffer context-buffer
-      (erase-buffer)
-      (insert "# Please mark regions of text to accumulate context for your prompt.\n"
-              "# Each marked region will be appended below.\n"
-              "# Enter your message at the prompt below the accumulated context.\n"
-              "# Hit C-c C-c to complete and send the prompt, or C-c C-k to cancel.\n\n")
-      (insert "# Accumulated Context:\n\n")
-      (insert "\n# Your Message:\n\n")
-      (local-set-key (kbd "C-c C-c") 'ellm-context-send)
-      (local-set-key (kbd "C-c C-k") 'ellm-context-cancel))
-    (pop-to-buffer context-buffer)
-    (goto-char (ellm-context-message-position))
-    (add-hook 'activate-mark-hook 'ellm-context-capture-region)))
-
-(defun ellm-send-prompt (context message)
-  "Send the accumulated CONTEXT and user MESSAGE to the language model.
-Display the result in a new buffer."
-  (let ((prompt (concat context message)))
-    (ellm-send-to-model prompt)))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; CONSTRUCTING CONTEXT END ;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defun ellm--add-context-from-region (prompt)
   "Use the active region if any to attach context to the `PROMPT' string.
 Use the `ellm-prompt-context-fmt-string' template to add context from that
@@ -1659,18 +1594,64 @@ Note that `FILENAME' should be an absolute path to the file."
       (insert json-string)
       (newline))))
 
+(defvar ellm--server-process nil
+  "The process object for the ellm server.")
+
 (defun ellm--server-running-p ()
   "Return non-nil if the ellm server is running."
-  (not (string= "" (shell-command-to-string "lsof -i :5040"))))
+  (and ellm--server-process (process-live-p ellm--server-process)))
 
 (defun ellm-start-server ()
-  "Start the ellm server."
+  "Start the ellm Node.js server."
   (interactive)
   (unless (ellm--server-running-p)
-    (let ((default-directory "~/projects/emacs/ellm")
-          (openai-api-key (funcall ellm-get-openai-api-key)))
-      (setenv "OPENAI_API_KEY" openai-api-key)
-      (start-process "ellm-server" "*ellm-server*" "node" "server/server.js"))))
+    (let ((default-directory (file-name-directory (locate-library "ellm")))
+          (openai-api-key (ellm--get-openai-api-key-from-env)))
+      (unless openai-api-key
+        (setenv "OPENAI_API_KEY" (funcall ellm-get-openai-api-key)))
+      (setq ellm--server-process
+            (start-process "ellm-server" "*ellm-server*"
+                           "node" "--trace-deprecation"
+                           (expand-file-name "server.js")
+                           "--host" ellm-server-host
+                           "--port" (number-to-string ellm-server-port)))))
+  ;; (set-process-query-on-exit-flag ellm--server-process nil)
+  (message "ellm Node.js server started."))
+
+(defun ellm-stop-server ()
+  "Stop the ellm Node.js server."
+  (interactive)
+  (when (ellm--server-running-p)
+    (kill-process ellm--server-process)
+    (setq ellm--server-process nil)
+    (message "ellm Node.js server stopped.")))
+
+(defun ellm-text-to-speech (&optional text)
+  "Convert `TEXT' to speech, or the content of the active region if `TEXT' is nil."
+  (interactive)
+  (unless text
+    (unless (use-region-p)
+      (user-error "No active region to convert to speech"))
+    (setq text (buffer-substring-no-properties (region-beginning) (region-end)))
+    (let* ((timestamp (format-time-string "%Y%m%d%H%M%S"))
+           (filepath (concat "~/.ellm/speech/" timestamp ".wav"))
+           (url (concat ellm-server-host ":" (number-to-string ellm-server-port) "/tts"))
+           (data `(("input" . ,text)
+                  ("filepath" . ,filepath))))
+      (request
+        url
+        :type "POST"
+        :data (json-encode `(("data" . ,data)))
+        :headers '(("Content-Type" . "application/json"))
+        :parser 'json-read
+        :success (cl-function
+                  (lambda (&key data &allow-other-keys)
+                    (progn
+                      (start-process "aplay-process" nil "aplay" "-q" filepath)
+                      (message data))))
+        :error (cl-function
+                (lambda (&key error-thrown &allow-other-keys)
+                  (message "Error: %S" error-thrown)))))))
 
 (defvar ellm-context-collection-mode-map
   (let ((map (make-sparse-keymap)))
@@ -1719,6 +1700,7 @@ Note that `FILENAME' should be an absolute path to the file."
 (define-minor-mode ellm-mode
   "Minor mode for interacting with LLMs."
   :group 'ellm
+  :lighter " ellm"
   :keymap (let ((map (make-sparse-keymap)))
             (define-key map (kbd "C-c ; N") #'ellm-chat-at-point)
             (define-key map (kbd "C-c ; n") #'ellm-chat)
@@ -1731,15 +1713,20 @@ Note that `FILENAME' should be an absolute path to the file."
             (define-key map (kbd "C-c ; j") #'ellm-org-next-message)
             (define-key map (kbd "C-c ; k") #'ellm-org-previous-message)
             map)
-  :global true
+  :global nil
   (if ellm-mode
-      (ellm-start-server)))
+      (ellm-start-server)
+    (ellm-stop-server)))
 
 ;;;###autoload
 (define-globalized-minor-mode global-ellm-mode ellm-mode
   (lambda ()
     (ellm--setup-persistance)
-    (ellm-mode 1)))
+    (ellm-mode 1))
+  :global t
+  :group 'ellm)
+
+(add-hook 'kill-emacs-hook 'ellm-stop-server)
 
 (provide 'ellm)
 ;;; ellm.el ends here
