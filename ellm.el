@@ -962,7 +962,7 @@ The `RESPONSE' is expected to be a string."
                                          "\n\n"
                                          org-formatted-new-messages)
                                org-formatted-new-messages)))
-    (ellm--log-org-messages messages-to-insert)
+    (ellm--log messages-to-insert "MESSAGES-TO-INSERT")
     (with-current-buffer conversations-buffer
       (let ((inhibit-read-only t))
         (if-let ((pos (and ellm-save-conversations (org-id-find id 'marker))))
