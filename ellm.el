@@ -307,6 +307,9 @@ See `ellm--add-context-from-region' for usage details.")
 (defconst ellm--log-buffer-name "*ELLM-Logs*"
   "Log buffer for LLM messages.")
 
+(defconst ellm-context-collection-buffer "*ELLM-Context-Collection*"
+  "Buffer to collect context for the LLM prompt.")
+
 (defvar ellm-provider-configurations
   `((openai . ((base-url . ,ellm--openai-api-url)
                (get-api-key . ,(lambda () (funcall ellm-get-openai-api-key)))
@@ -891,9 +894,12 @@ Example usage:
          (url-request-method "POST")
          (url-request-extra-headers request-headers)
          (url-request-data request-body))
-      (ellm--log-request url request-headers request-body)
+      (ellm--log `((url . ,url)
+                   (headers . request-headers)
+                   (body . request-body)) "REQUEST")
       (url-retrieve url #'ellm--handle-response (list buffer conversation))
-      (message "...Waiting for response from %s..." (symbol-name (ellm--get-model-provider conversation)))
+      (message "...Waiting for response from %s..."
+               (symbol-name (ellm--get-model-provider conversation)))
   nil))
 
 (defun ellm--handle-response (status conversations-buffer conversation)
@@ -905,13 +911,13 @@ updated in the `CONVERSATIONS-BUFFER'."
   (message "...Received response from %s..."
            (symbol-name (ellm--get-model-provider conversation)))
   (cond ((plist-get status :error)
-         (ellm--log-http-error status))
+         (ellm--log status "HTTP-ERROR"))
         ((plist-get status :redirect)
-         (ellm--log-http-redirect status))
+         (ellm--log status "HTTP-REDIRECT"))
         (t
          (goto-char url-http-end-of-headers)
          (if (<= (point-max) (point))
-             (ellm--log-no-response-body)
+             (ellm--log "No response body (DNS resolve or TCP error)" "REQUEST-ERROR")
            (let ((response (ellm--parse-json-response)))
              (when response
                (ellm--add-response-to-conversation conversations-buffer conversation response)
@@ -930,7 +936,7 @@ The `CONVERSATION' is then added to the `CONVERSATIONS-BUFFER'."
          (parse-response (alist-get 'parse-response config))
          (response-content (funcall parse-response response)))
     (ellm--handle-assistant-response response-content conversation)
-    (ellm--log-conversation conversation)
+    (ellm--log conversation "CONVERSATION")
     (ellm--insert-conversation-into-org conversations-buffer conversation)))
 
 (defun ellm--handle-assistant-response (response conversation)
@@ -993,10 +999,10 @@ The `RESPONSE' is expected to be a string."
   (condition-case error
       (let ((response-body
              (string-trim (buffer-substring-no-properties (point) (point-max)))))
-        (ellm--log-response-body response-body)
+        (ellm--log response-body "RESPONSE")
         (json-parse-string response-body))
     (json-parse-error
-     (ellm--log-json-error error)
+     (ellm--log error "JSON-PARSE-ERROR")
      nil)))
 
 (defun ellm--parse-response-openai (response)
@@ -1007,9 +1013,9 @@ This function is meant to be used with the response from the OpenAI API."
              (first-choice (aref choices 0))
              (msg (gethash "message" first-choice))
              (content (gethash "content" msg)))
-        (ellm--log-response-content content)
+        (ellm--log content "RESPONSE-CONTENT")
         (replace-regexp-in-string "\\\\\"" "\"" content))
-    (wrong-type-argument (ellm--log-response-error error))))
+    (wrong-type-argument (ellm--log error "RESPONSE-ERROR"))))
 
 (defun ellm--parse-response-anthropic (response)
   "Extract the text from the json `RESPONSE'."
@@ -1017,9 +1023,9 @@ This function is meant to be used with the response from the OpenAI API."
       (let* ((messages (gethash "content" response))
              (first-message (aref messages 0))
              (content (gethash "text" first-message)))
-        (ellm--log-response-content content)
+        (ellm--log content "RESPONSE-CONTENT")
         (replace-regexp-in-string "\\\\\"" "\"" content))
-    (wrong-type-argument (ellm--log-response-error error))))
+    (wrong-type-argument (ellm--log error "RESPONSE-ERROR"))))
 
 (defun ellm--add-or-update-title (title conversation)
   "Add or update the `TITLE' in the `CONVERSATION'.
@@ -1051,9 +1057,9 @@ Note that both components are trimmed of whitespace."
 (defun ellm--convert-messages-to-org (messages)
   "Convert `MESSAGES' to an Org-formatted string using Pandoc."
   (let ((markdown-string (ellm--messages-to-string messages)))
-    (ellm--log-markdown-messages markdown-string)
+    (ellm--log markdown-string "MESSAGES-FOR-MARKDOWN")
     (let ((org-string (ellm--markdown-to-org-sync markdown-string)))
-      (ellm--log-org-messages org-string)
+      (ellm--log org-string "MESSAGES-FOR-ORG")
       org-string)))
 
 (defun ellm--messages-to-string (messages &optional headline-char)
@@ -1367,87 +1373,19 @@ This function does not take any arguments and returns nil."
     (dolist (symbol symbols-to-add)
       (cl-pushnew symbol savehist-additional-variables))))
 
-(defun ellm--log (data &optional label should-encode-to-json)
-  "Log `DATA' with an optional `LABEL'.
-Will call `json-encode' on `DATA' if
-`SHOULD-ENCODE-TO-JSON' is set to a non-nil value."
-  (let* ((json-data (if should-encode-to-json (json-encode data) data))
-         (formatted-log (format "{\"TIMESTAMP\": \"%s\", \"%s\": %s}"
-                                (format-time-string "[%Y-%m-%d %a %H:%M]")
-                                (or label "INFO")
-                                json-data)))
-    (with-current-buffer (get-buffer-create ellm--log-buffer-name)
-      (goto-char (point-max))
-      (unless (bolp) (newline))
-      (save-excursion
-        (insert formatted-log)
-        (newline))
-      (json-pretty-print (point) (point-max)))))
-
-(defun ellm--log-response-error (error)
-  "Log the `ERROR' response."
-  (ellm--log error "RESPONSE-TYPE-ERROR" t))
-
-(defun ellm--log-json-error (error)
-  "Log the `ERROR' when response fails to parse as json."
-  (ellm--log error "JSON-ERROR" t))
-
-(defun ellm--log-response-splitting-error (error)
-  "Log the `ERROR' when response fails to split."
-  (ellm--log (format "No title or body in response: %S" error)
-             "RESPONSE-FORMAT-ERROR" t))
-
-(defun ellm--log-http-error (status)
-  "Log HTTP `STATUS' errors."
-  (ellm--log (if (fboundp 'http-status-code)
-                 (http-status-code status)
-               (plist-get status :error) "HTTP-ERROR" t)))
-
-(defun ellm--log-http-redirect (status)
-  "Log HTTP `STATUS' redirects."
-  (ellm--log (plist-get status :redirect) "HTTP-REDIRECT") t)
-(defun ellm--log-no-response-body ()
-  "Log that were no response body."
-  (ellm--log "No response body (DNS resolve or TCP error)" "REQUEST-ERROR" t))
-
-(defun ellm--log-request (url headers body)
-  "Log the request `URL', `HEADERS', and `BODY'."
+(defun ellm--log (data &optional label _)
+  "Log `DATA' with an optional `LABEL'."
   (when ellm--debug-mode
-    (ellm--log url "REQUEST-URL" t)
-    (ellm--log headers "REQUEST-HEADERS" t)
-    (ellm--log body "REQUEST-BODY")))
-
-(defun ellm--log-request-headers (headers)
-  "Log the request `HEADERS'."
-  (when ellm--debug-mode (ellm--log headers "REQUEST-HEADERS" t)))
-
-(defun ellm--log-request-body (body)
-  "Log the request `BODY'."
-  (when ellm--debug-mode (ellm--log body "REQUEST-BODY")))
-
-(defun ellm--log-response-body (response-body)
-  "Log the `RESPONSE-BODY'."
-  (when ellm--debug-mode (ellm--log response-body "RESPONSE-BODY")))
-
-(defun ellm--log-response-content (response-content)
-  "Log the `RESPONSE-CONTENT'."
-  (when ellm--debug-mode (ellm--log response-content "RESPONSE-CONTENT" t)))
-
-(defun ellm--log-conversation (conversation)
-  "Log the `CONVERSATION'."
-  (when ellm--debug-mode (ellm--log conversation "CONVERSATION" t)))
-
-(defun ellm--log-markdown-messages (markdown-string)
-  "Log `MARKDOWN-STRING'."
-  (when ellm--debug-mode
-    (ellm--log markdown-string
-               "MESSAGES-FOR-MARKDOWN" t)))
-
-(defun ellm--log-org-messages (org-string)
-  "Log `ORG-STRING'."
-  (when ellm--debug-mode
-    (ellm--log org-string
-               "MESSAGES-FOR-ORG-MODE" t)))
+    (let* ((timestamp (format-time-string "[%Y-%m-%d %a %H:%M]"))
+           (log-entry `(("TIMESTAMP" . ,timestamp)
+                        (,(or label "INFO") . ,data))))
+      (with-current-buffer (get-buffer-create ellm--log-buffer-name)
+        (goto-char (point-max))
+        (unless (bolp) (newline))
+        (save-excursion
+          (insert (json-encode log-entry))
+          (newline))
+        (json-pretty-print (point) (point-max))))))
 
 (defun ellm-org--apply-rating-face ()
   "Apply custom face to org headlines based on their RATING property."
