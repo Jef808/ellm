@@ -307,9 +307,6 @@ See `ellm--add-context-from-region' for usage details.")
 (defconst ellm--log-buffer-name "*ELLM-Logs*"
   "Log buffer for LLM messages.")
 
-(defconst ellm-context-collection-buffer "*ELLM-Context-Collection*"
-  "Buffer to collect context for the LLM prompt.")
-
 (defvar ellm-provider-configurations
   `((openai . ((base-url . ,ellm--openai-api-url)
                (get-api-key . ,(lambda () (funcall ellm-get-openai-api-key)))
@@ -616,9 +613,6 @@ When togling off, restore the previously set values."
     (setq ellm-model model
           ellm-provider (plist-get model-properties :provider)
           ellm-model-size (plist-get model-properties :size))))
-
-(defvar ellm-context nil
-  "The context to use for the next prompt.")
 
 (defvar ellm--major-mode-to-org-lang-alist
   '((python-ts-mode . "python")
@@ -1590,49 +1584,6 @@ Note that `FILENAME' should be an absolute path to the file."
         :error (cl-function
                 (lambda (&key error-thrown &allow-other-keys)
                   (message "Error: %S" error-thrown)))))))
-
-(defvar ellm-context-collection-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c C-c") 'ellm-context-collection-complete)
-    (define-key map (kbd "C-c C-k") 'ellm-context-collection-cancel)
-    map)
-  "Keymap for `ellm-context-collection-mode'.")
-
-(defun ellm-context-collection-add-region ()
-  "Add the current region to the context collection buffer."
-  (interactive)
-  (if (use-region-p)
-      (let ((region-content (buffer-substring-no-properties (region-beginning) (region-end))))
-        (with-current-buffer ellm-context-collection-buffer
-          (goto-char (point-max))
-          (insert region-content "\n\n"))
-        (deactivate-mark))
-    (message "No active region to add.")))
-
-(defun ellm-context-collection-complete ()
-  "Finalize the context collection and insert it into the prompt."
-  (interactive)
-  (let ((context (with-current-buffer ellm-context-collection-buffer
-                   (buffer-string))))
-    (ellm--add-context-from-region context)
-    (ellm-context-collection-mode -1)))
-
-(defun ellm-context-collection-cancel ()
-  "Cancel the context collection."
-  (interactive)
-  (ellm-context-collection-mode -1)
-  (kill-buffer ellm-context-collection-buffer))
-
-(define-minor-mode ellm-context-collection-mode
-  "Minor mode for collecting context from multiple regions."
-  :lighter " Ellm-Collect"
-  :keymap ellm-context-collection-mode-map
-  (if ellm-context-collection-mode
-      (progn
-        (get-buffer-create ellm-context-collection-buffer)
-        (with-current-buffer ellm-context-collection-buffer
-          (erase-buffer)))
-    (kill-buffer ellm-context-collection-buffer)))
 
 ;;;###autoload
 (define-minor-mode ellm-mode
