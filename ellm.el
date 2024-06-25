@@ -73,11 +73,6 @@ symbol, and return the path as a string"
 (defconst ellm--mistral-api-url "https://codestral.mistral.ai/v1/chat/completions"
   "The URL to send requests to the Mistral API.")
 
-(defcustom ellm--temp-conversations-buffer-name "*LLM Conversations*"
-  "The file to store conversation history."
-  :type 'string
-  :group 'ellm)
-
 (defcustom ellm--conversations-dir
   (directory-file-name (expand-file-name ".ellm/" "~/"))
   "The directory to store conversation history."
@@ -310,24 +305,23 @@ See `ellm--add-context-from-region' for usage details.")
 (defconst ellm--log-buffer-name "*ELLM-Logs*"
   "Log buffer for LLM messages.")
 
+(defconst ellm--temp-conversations-buffer-name "*LLM Conversations*"
+  "The file to store conversation history.")
+
 (defvar ellm-provider-configurations
-  `((openai . ((get-api-key . ,(lambda () (funcall ellm-get-openai-api-key)))
-               (prepare-request-headers . ellm--prepare-request-headers-default)
+  `((openai . ((prepare-request-headers . ellm--prepare-request-headers-default)
                (prepare-request-body . ellm--prepare-request-body-default)
                (parse-response . ellm--parse-response-openai)
                (models-alist . ,ellm--openai-models-alist)))
-    (anthropic . ((get-api-key . ,(lambda () (funcall ellm-get-anthropic-api-key)))
-                  (prepare-request-headers . ellm--prepare-request-headers-anthropic)
+    (anthropic . ((prepare-request-headers . ellm--prepare-request-headers-anthropic)
                   (prepare-request-body . ellm--prepare-request-body-anthropic)
                   (parse-response . ellm--parse-response-anthropic)
                   (models-alist . ,ellm--anthropic-models-alist)))
-    (groq . ((get-api-key . ,(lambda () (funcall ellm-get-groq-api-key)))
-             (prepare-request-headers . ellm--prepare-request-headers-default)
+    (groq . ((prepare-request-headers . ellm--prepare-request-headers-default)
              (prepare-request-body . ellm--prepare-request-body-default)
              (parse-response . ellm--parse-response-openai)
              (models-alist . ,ellm--groq-models-alist)))
-    (mistral . ((get-api-key . ,(lambda () (funcall ellm-get-mistral-api-key)))
-                (prepare-request-headers . ellm--prepare-request-headers-default)
+    (mistral . ((prepare-request-headers . ellm--prepare-request-headers-default)
                 (prepare-request-body . ellm--prepare-request-body-default)
                 (parse-response . ellm--parse-response-openai)
                 (models-alist . ,ellm--mistral-models-alist))))
@@ -763,22 +757,21 @@ Return the conversation-data alist."
   "Prepare the API call body to send `CONVERSATION'."
   (let* ((provider (ellm--get-model-provider conversation))
          (config (alist-get provider ellm-provider-configurations))
-         (api-key-fn (lambda () (funcall (alist-get 'get-api-key config))))
          (prepare-fn (alist-get 'prepare-request-headers config)))
-    (funcall prepare-fn api-key-fn)))
+    (funcall prepare-fn)))
 
-(defun ellm--prepare-request-headers-default (get-api-key)
+(defun ellm--prepare-request-headers-default ()
   "Prepare the headers for API requests as done for openai models.
 
 The `GET-API-KEY' function is used to retrieve the api key for the provider."
-  `(("Authorization" . ,(concat "Bearer " (funcall get-api-key)))
+  `(("Authorization" . ,(concat "Bearer " (funcall ellm-get-api-key)))
     ("Content-Type" . "application/json; charset=utf-8")))
 
-(defun ellm--prepare-request-headers-anthropic (get-api-key)
+(defun ellm--prepare-request-headers-anthropic ()
   "Prepare the headers for API requests made to anthropic models.
 
 The `GET-API-KEY' function is used to retrieve the api key for anthropic."
-  `(("x-api-key" . ,(funcall get-api-key))
+  `(("x-api-key" . ,(funcall ellm-get-api-key))
     ("anthropic-version" . "2023-06-01")
     ("Content-Type" . "application/json; charset=utf-8")))
 
