@@ -1630,41 +1630,116 @@ Note that `FILENAME' should be an absolute path to the file."
 (defconst ellm--context-buffer-name "*ellm context*"
   "The name of the buffer used to display the context chunks.")
 
-(defun ellm-context-add ()
-  "Create an overlay for the current region and add it to `ellm-context-overlays'."
-  (interactive)
-  (if (use-region-p)
-      (let* ((start (region-beginning))
-             (end (region-end))
-             (overlay (make-overlay start end)))
-        (overlay-put overlay 'ellm-context t)
-        (overlay-put overlay 'face 'highlight)
-        (overlay-put overlay 'evaporate t)
-        (push overlay ellm-context-overlays)
-        (deactivate-mark)
-        (message "Context added"))
-    (message "No region selected")))
+(defface ellm-context-buffer-face
+  '((((background dark)) (:background "#328C0411328C" :extend t))  ; Very dark magenta
+    (t                   (:background "#CD73FBEECD73" :extend t))) ; Very pale green
+  "Face for context overlays in the ellm context buffer."
+  :group 'ellm)
+(defvar ellm-context-buffer-face 'ellm-context-buffer-face)
 
-(defun ellm--collect-contexts ()
-  "Collect the text from all context overlays."
-  (let ((context-buffer (get-buffer-create ellm--context-buffer-name)))
+(defface ellm-context-face
+  '((((background dark)) (:background "#111313F03181" :extend t))  ; Very dark blue
+    (t                   (:background "#EEECEC0FCE7E" :extend t))) ; Very pale goldenrod
+  "Face for context overlays in their original buffer."
+  :group 'ellm)
+(defvar ellm-context-face 'ellm-context-face)
+
+(defun ellm--context-buffer-setup ()
+  "Setup the context buffer."
+  (let ((context-buffer (get-buffer-create ellm--context-buffer-name))
+        (inhibit-read-only t))
     (with-current-buffer context-buffer
       (erase-buffer)
-      (dolist (overlay ellm-context-overlays)
-        (let ((start (overlay-start overlay))
-              (end (overlay-end overlay))
-              (source-buffer (overlay-buffer overlay)))
-          (insert (with-current-buffer source-buffer
-                    (buffer-substring start end)))
-          (newline 2))))))
+      (insert "## CONTEXT")
+      (newline 2)
+      (view-mode 1))
+    context-buffer))
 
-(defun ellm-view-context ()
+(defun ellm--context-at (posn)
+  "Return the context overlay at position `POSN'."
+  (let ((overlays (overlays-at posn)))
+    (seq-find (lambda (ov) (overlay-get ov 'ellm-context)) overlays)))
+
+(defun ellm--contexts-in-region (beg end)
+  "Return the context overlays in the region between `BEG' and `END'."
+  (let ((overlays (overlays-in beg end)))
+    (seq-filter (lambda (ov) (overlay-get ov 'ellm-context)) overlays)))
+
+(defun ellm-add-context-chunk ()
+   "Create an overlay for the current region and add it to `ellm-context-overlays'."
+   (interactive)
+   (if (use-region-p)
+       (let* ((start (region-beginning))
+              (end (region-end))
+              (overlay (make-overlay start end)))
+         (dolist (ov (ellm--contexts-in-region start end))
+           (ellm-remove-context-chunk ov))
+         (ellm--insert-context-content overlay)
+         (overlay-put overlay 'ellm-context t)
+         (overlay-put overlay 'face ellm-context-face)
+         (overlay-put overlay 'evaporate t)
+         (push overlay ellm-context-overlays)
+         (deactivate-mark)
+         (message "Context added"))
+     (message "No region selected")))
+
+(defun ellm--insert-context-content (overlay)
+   "Insert the content of the `OVERLAY' into the context buffer.
+ We create a corresponding overlay in the context buffer to keep track of the
+ original context chunks."
+   (let ((start (overlay-start overlay))
+         (end (overlay-end overlay))
+         (source-buffer (overlay-buffer overlay)))
+     (with-current-buffer ellm--context-buffer-name
+       (goto-char (point-max))
+       (let ((inhibit-read-only t)
+             (insert-start (point)))
+         (insert (with-current-buffer source-buffer
+                   (buffer-substring start end)))
+         (let* ((insert-end (point))
+                (new-overlay (make-overlay insert-start insert-end)))
+           (newline 2)
+           (overlay-put new-overlay 'ellm-context t)
+           (overlay-put new-overlay 'face 'ellm-context-buffer-face)
+           (overlay-put new-overlay 'ellm-other-overlay overlay)
+           (overlay-put overlay 'ellm-other-overlay new-overlay))))))
+
+ (defun ellm-remove-context-chunk (&optional overlay)
+   "Remove the content of the `OVERLAY' from the context buffer."
+   (interactive)
+   (unless overlay
+     (setq overlay (ellm--context-at (point))))
+   (unless overlay
+     (error "No context overlay at point: %S" (point)))
+   (unless (overlay-get overlay 'ellm-context)
+     (error "Not a valid context overlay: %S" overlay))
+   (let* ((buffer
+           (overlay-get overlay 'ellm-context-buffer-overlay))
+          (context-buffer-ov-p (buffer-match-p buffer ellm--context-buffer-name))
+          (other-overlay (overlay-get overlay 'ellm-other-overlay))
+          (context-buffer-ov (if context-buffer-ov-p overlay other-overlay))
+          (context-ov (if context-buffer-ov-p other-overlay overlay)))
+     (with-current-buffer ellm--context-buffer-name
+       (let ((start (overlay-start context-buffer-ov))
+             (end
+              (save-excursion
+                (goto-char (overlay-end context-buffer-ov))
+                (line-end-position 3)))
+             (inhibit-read-only t))
+         (delete-region start end)))
+     (delete-overlay context-buffer-ov)
+     (delete-overlay context-ov)
+     (setq ellm-context-overlays (delq context-ov ellm-context-overlays))))
+
+(defun ellm-view-context-buffer ()
   "View the context overlays in the current buffer."
   (interactive)
-  (ellm--collect-contexts)
-  (pop-to-buffer ellm--context-buffer-name)
-  (goto-char (point-min))
-  (recenter 4))
+  (let ((buffer
+         (or (get-buffer ellm--context-buffer-name)
+             (ellm--context-buffer-setup))))
+    (pop-to-buffer buffer)
+    (goto-char (point-min))
+    (recenter 4)))
 
 (defun ellm-clear-context ()
   "Remove all context overlays."
@@ -1672,6 +1747,7 @@ Note that `FILENAME' should be an absolute path to the file."
   (dolist (overlay ellm-context-overlays)
     (delete-overlay overlay))
   (setq ellm-context-overlays nil)
+  (ellm--context-buffer-setup)
   (message "All context chunks cleared"))
 
 ;;;###autoload
@@ -1691,10 +1767,10 @@ Note that `FILENAME' should be an absolute path to the file."
     (define-key map (kbd "C-c ; o") #'ellm-org-fold-conversations-buffer)
     (define-key map (kbd "C-c ; j") #'ellm-org-next-message)
     (define-key map (kbd "C-c ; k") #'ellm-org-previous-message)
-    (define-key map (kbd "C-c ; C") (make-sparse-keymap))
-    (define-key map (kbd "C-c ; C a") #'ellm-context-add)
-    (define-key map (kbd "C-c ; C b") #'ellm-view-context)
-    (define-key map (kbd "C-c ; C C-k") #'ellm-clear-context)
+    (define-key map (kbd "C-c ; m") #'ellm-add-context-chunk)
+    (define-key map (kbd "C-c ; d") #'ellm-remove-context-chunk)
+    (define-key map (kbd "C-c ; x") #'ellm-view-context-buffer)
+    (define-key map (kbd "C-c ; C-M-k") #'ellm-clear-context)
     map)
   :global nil
   (if ellm-mode
