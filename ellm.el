@@ -33,7 +33,7 @@
 
 (defgroup ellm nil
   "Make API calls to LLMs."
-  :group 'tools
+  :group 'applications
   :prefix "ellm-")
 
 (defvar ellm--prompt-history nil
@@ -49,27 +49,15 @@
   :type 'integer
   :group 'ellm)
 
-(defcustom ellm-get-openai-api-key
-  #'ellm--get-openai-api-key-from-env
-  "A function which retrieves your OpenAI API key."
+(defcustom ellm-get-api-key 'ellm-get-api-key-from-env
+  "The function which retrieves your API key for the current provider."
   :type 'function
   :group 'ellm)
 
-(defcustom ellm-get-anthropic-api-key
-  #'ellm--get-anthropic-api-key-from-env
-  "A function which retrieves your Anthropic API key."
-  :type 'function
-  :group 'ellm)
-
-(defcustom ellm-get-groq-api-key
-  #'ellm--get-groq-api-key-from-env
-  "A function which retrieves your Groq API key."
-  :type 'function
-  :group 'ellm)
-
-(defcustom ellm-get-mistral-api-key
-  #'ellm--get-mistral-api-key-from-env
-  "A function which retrieves your Mistral API key."
+(defcustom ellm-password-store-path-by-provider nil
+  "A function to the password store path to get api keys.
+The function should take one argument, the provider as a
+symbol, and return the path as a string"
   :type 'function
   :group 'ellm)
 
@@ -192,7 +180,7 @@
   :type 'alist
   :group 'ellm)
 
-(defun ellm--providers-supported ()
+(defun ellm-providers-supported ()
     "List of supported providers."
   (seq-uniq (mapcar
              (lambda (model)
@@ -345,6 +333,38 @@ See `ellm--add-context-from-region' for usage details.")
                 (models-alist . ,ellm--mistral-models-alist))))
   "Alist mapping providers to their API configurations.")
 
+(defun ellm-get-api-key-from-env ()
+  "Get the API key from the environment for the `PROVIDER'."
+  (getenv (format "%s_API_KEY" (upcase (symbol-name ellm-provider)))))
+
+(declare-function password-store-get "password-store.el" (entry))
+
+(defun ellm-get-api-key-from-password-store ()
+  "Get the API key from the password store.
+The password store entry is gotten by evaluating
+the `ellm-password-store-path-by-provider' function with the value
+of `ellm-provider'."
+  (password-store-get (funcall ellm-password-store-path-by-provider ellm-provider)))
+
+; TODO Use this to configure the providers
+(defmacro ellm-define-provider (name &rest config)
+  "Define a new provider with given `NAME' and `CONFIG'.
+The `CONFIG' should be a plist with the following keys:
+- `api-key': a function to get the API key.
+- `prepare-request-headers': a function to prepare the request headers.
+- `prepare-request-body': a function to prepare the request body.
+- `parse-response': a function to parse the response.
+- `models-alist': an alist mapping model sizes to model names."
+  `(defcustom ,(intern (format "ellm-%s-config" name))
+     ',config
+     ,(format "Configuration for %s API." name)
+  :type '(plist :key-type symbol :value-type sexp)
+  :group 'ellm))
+
+(defun ellm-get-provider-config (provider)
+  "Get the configuration for the `PROVIDER'."
+  (symbol-value (intern (format "ellm-%s-config" (symbol-name provider)))))
+
 (defun ellm--get-system-messages ()
   "Get the system messages."
   (let ((system-messages (copy-alist ellm-system-messages)))
@@ -373,22 +393,6 @@ system message function, if there are any."
   "Get the configuration for the `PROVIDER'."
   (alist-get provider ellm-provider-configurations))
 
-(defun ellm--get-openai-api-key-from-env ()
-  "Get the OpenAI API key from the environment."
-  (getenv "OPENAI_API_KEY"))
-
-(defun ellm--get-anthropic-api-key-from-env ()
-  "Get the Anthropic API key from the environment."
-  (getenv "ANTHROPIC_API_KEY"))
-
-(defun ellm--get-groq-api-key-from-env ()
-  "Get the Groq API key from the environment."
-  (getenv "GROQ_API_KEY"))
-
-(defun ellm--get-mistral-api-key-from-env ()
-  "Get the Mistral API key from the environment."
-  (getenv "MISTRAL_API_KEY"))
-
 (defun ellm-set-system-message (&optional system-message)
   "Set the `SYSTEM-MESSAGE' to use for the next prompt."
   (interactive)
@@ -413,7 +417,7 @@ system message function, if there are any."
                                      (format
                                       (propertize (symbol-name item)
                                                   'face 'font-lock-type-face)))
-                                 (ellm--providers-supported))))))
+                                 (ellm-providers-supported))))))
          (config (ellm--get-provider-configuration p))
          (models-alist (alist-get 'models-alist config)))
     (setq ellm-model (alist-get ellm-model-size models-alist)
@@ -705,45 +709,55 @@ the possibly adjusted values."
               (setq r-end (- (point) 1))))))))
   (list r-beg r-end lang))
 
+(defmacro ellm--append-to! (place element)
+  "Append ELEMENT to the end of the list stored in PLACE.
+Similar to `push', but for the end of the list."
+  `(setf ,place
+         (if ,place
+             (nconc ,place (list ,element))
+           (list ,element))))
+
 (defun ellm--make-message (role content)
   "Create a message with the given `ROLE' and `CONTENT'."
   `((role . ,role) (content . ,(encode-coding-string content 'utf-8))))
 
 (defun ellm--add-system-message (content conversation)
-  "Prepend a system message with `CONTENT' to the `CONVERSATION'."
+  "Add a system message with `CONTENT' to the `CONVERSATION'.
+The system message is prepended to the `messages' list."
   (push (ellm--make-message :system content)
-        (alist-get 'messages conversation nil nil)))
+        (alist-get 'messages conversation)))
 
-(defun ellm--add-user-message (content conversation)
-  "Append a user message with `CONTENT' to the `CONVERSATION'."
-  (and (nconc (alist-get 'messages conversation)
-                (list (ellm--make-message :user content)))
-       conversation))
+(defun ellm--add-user-message (conversation content)
+  "Append a user message with `CONTENT' to the `CONVERSATION'.
+The user message is appended to the `messages' list."
+  (ellm--append-to! (alist-get 'messages conversation)
+                    (ellm--make-message :user content)))
 
-(defun ellm--add-assistant-message (content conversation)
-  "Append an assistant message with `CONTENT' to the `CONVERSATION'."
-  (and (nconc (alist-get 'messages conversation)
-              (list (ellm--make-message :assistant content)))
-       conversation))
+(defun ellm--add-assistant-message (conversation content)
+  "Append an assistant message with `CONTENT' to the `CONVERSATION'.
+The assistant message is appended to the `messages' list."
+  (ellm--append-to! (alist-get 'messages conversation)
+                    (ellm--make-message :assistant content)))
 
 (defun ellm--initialize-conversation (prompt)
   "Initialize a new conversation starting with `PROMPT'.
-
 Return the conversation-data alist."
-  (let* ((contextualized-prompt (ellm--add-context-from-region prompt))
-         (user-message (ellm--make-message :user contextualized-prompt))
-         (system-message-args
+  (let* ((system-message-args
           (when (derived-mode-p 'prog-mode)
             (list :language
                   (thread-last (symbol-name major-mode)
                                (string-remove-suffix "-mode")
-                               (string-remove-suffix "-ts"))))))
-    `((messages . (,user-message))
-      (temperature . ,ellm-temperature)
-      (max_tokens . ,ellm-max-tokens)
-      (model . ,ellm-model)
-      (title . nil)
-      (system . ,(ellm--get-system-message system-message-args)))))
+                               (string-remove-suffix "-ts")))))
+         (conversation
+          `((messages . nil)
+            (temperature . ,ellm-temperature)
+            (max_tokens . ,ellm-max-tokens)
+            (model . ,ellm-model)
+            (title . nil)
+            (system . ,(ellm--get-system-message system-message-args))))
+         (contextualized-prompt (ellm--add-context-from-region prompt)))
+    (ellm--add-user-message conversation contextualized-prompt)
+    conversation))
 
 (defun ellm--prepare-request-headers (conversation)
   "Prepare the API call body to send `CONVERSATION'."
@@ -770,39 +784,39 @@ The `GET-API-KEY' function is used to retrieve the api key for anthropic."
 
 (defun ellm--serialize-conversation (conversation)
   "Serialize the `CONVERSATION' to a JSON string."
-  (let (messages)
-    (dolist (msg (alist-get 'messages conversation) messages)
-      (push `((role . ,(substring (symbol-name (alist-get 'role msg)) 1))
-              (content . ,(alist-get 'content msg)))
-            messages))
-    (json-serialize (seq-uniq (append `((messages . ,(vconcat messages))) conversation)))))
+  (let ((messages
+         (vconcat
+          (seq-map
+           (lambda (msg)
+             `((role . ,(substring (symbol-name (alist-get 'role msg)) 1))
+               (content . ,(alist-get 'content msg))))
+           (alist-get 'messages conversation)))))
+    (json-serialize (cons `(messages . ,messages) conversation))))
 
 (defun ellm--prepare-request-body-default (conversation)
   "Prepare the messages list with a new user message based on `CONVERSATION'.
 The SYSTEM entry, if non-nil, is removed and made into a system message intead.
 Also remove the TITLE and ID entries."
-  (let* ((data (copy-alist conversation))
-         (messages (cl-copy-list (alist-get 'messages data)))
-         (system-message (alist-get 'system data)))
-    (setf (alist-get 'messages data) messages)
-    (when system-message
-      (ellm--add-system-message system-message data))
-    (setf (alist-get 'system data nil 'remove) nil)
-    (setf (alist-get 'title data nil 'remove) nil)
-    (setf (alist-get 'id data nil 'remove) nil)
-    (json-encode data)))
+  (let ((conversation-copy (copy-alist conversation)))
+    (when-let ((system-directive (alist-get 'system conversation))
+               (messages-copy (cl-copy-list (alist-get 'messages conversation))))
+      (setf (alist-get 'messages conversation-copy) messages-copy)
+      (ellm--add-system-message system-directive conversation-copy))
+    (setf (alist-get 'system conversation-copy nil 'remove) nil
+          (alist-get 'title conversation-copy nil 'remove) nil
+          (alist-get 'id conversation-copy nil 'remove) nil)
+    (ellm--serialize-conversation conversation-copy)))
 
 (defun ellm--prepare-request-body-anthropic (conversation)
   "Prepare the API call body to send `CONVERSATION'.
 Remove the SYSTEM entry in case it is nil.
 Also remove the TITLE and ID entries."
-  (let* ((data (copy-alist conversation))
-         (system-message (alist-get 'system data)))
-    (unless system-message
-      (setf (alist-get 'system data nil 'remove) nil))
-    (setf (alist-get 'title data nil 'remove) nil)
-    (setf (alist-get 'id data nil 'remove) nil)
-    (ellm--serialize-conversation data)))
+  (let ((conversation-copy (copy-alist conversation))
+        (system-directive (alist-get 'system conversation)))
+    (setf (alist-get 'system conversation-copy nil 'remove) system-directive
+          (alist-get 'title conversation-copy nil 'remove) nil
+          (alist-get 'id conversation-copy nil 'remove) nil)
+    (ellm--serialize-conversation conversation-copy)))
 
 (defun ellm--prepare-request-body (conversation)
   "Prepare the API call body to send `CONVERSATION'."
@@ -899,7 +913,7 @@ Example usage:
                        (get-buffer-create ellm--temp-conversations-buffer-name))))
          (conversation (or
                         (and current-conversation
-                             (ellm--add-user-message prompt current-conversation))
+                             (ellm--add-user-message current-conversation prompt))
                         (ellm--initialize-conversation prompt)))
          (url (ellm--get-url conversation))
          (request-headers (ellm--prepare-request-headers conversation))
@@ -908,8 +922,8 @@ Example usage:
          (url-request-extra-headers request-headers)
          (url-request-data request-body))
       (ellm--log `((url . ,url)
-                   (headers . request-headers)
-                   (body . request-body)) "REQUEST")
+                   (headers . ,request-headers)
+                   (body . ,request-body)) "REQUEST")
       (url-retrieve url #'ellm--handle-response (list buffer conversation))
       (message "...Waiting for response from %s..."
                (symbol-name (ellm--get-model-provider conversation)))
@@ -962,7 +976,7 @@ The `RESPONSE' is expected to be a string."
          (title (elt split-response 0))
          (content (elt split-response 1)))
     (ellm--add-or-update-title title conversation)
-    (ellm--add-assistant-message content conversation)))
+    (ellm--add-assistant-message conversation content)))
 
 (defun ellm--insert-conversation-into-org (conversations-buffer conversation)
   "Insert the `CONVERSATION' into the org file at `CONVERSATIONS-BUFFER'."
@@ -1206,7 +1220,7 @@ If `POSN' is nil, the current point is used."
 The `DATA' must be as the data accepted by `org-element-interpret-data'
 \(which see\)."
   (with-temp-buffer
-    (insert (org-element-interpret-data org-element))
+    (insert (org-element-interpret-data data))
     (s-trim (buffer-substring-no-properties (point-min) (point-max)))))
 
 (defun ellm--conversations-buffer-p (buffer)
