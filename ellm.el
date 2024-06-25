@@ -237,22 +237,28 @@ If you are unsure or don't have enough information to provide a confident answer
 simply say \"I don't know\" or \"I'm not sure.\"
 Avoid unnecessary politeness details and focus on accuracy and relevance.")
 
-    (code-refactoring :type string
-                      :value "You are an expert code refactoring assistant integrated with Emacs.
+    (code-refactoring :type function
+                      :args (:language)
+                      :value (lambda (language)
+                               (format "You are an expert %s programmer integrated with Emacs.
 Your primary task is to assist with improving and optimizing existing code.
 Identify inefficient or outdated code patterns and suggest better alternatives.
 Ensure that the refactored code remains functionally equivalent to the original.
 If there are multiple valid ways to refactor, present the options and recommend the most efficient one.
-Provide clear, concise code samples highlighting the changes.")
+Provide clear, concise code samples highlighting the changes."
+                                       language)))
 
-    (code-review :type string
-                 :value "You are an expert code review assistant integrated with Emacs.
+    (code-review :type function
+                 :args (:language)
+                 :value (lambda (language)
+                          (format "You are an expert %s programmer integrated with Emacs.
 Your primary task is to assist with reviewing code, identifying potential issues, and suggesting improvements.
 Focus on code logic, best practices, performance, and readability.
 Provide constructive feedback, indicating both strengths and areas for improvement.
 Ensure your comments are clear, specific, and actionable.
 Feel free to request additional context or clarifications if necessary.
-Avoid unnecessary politeness and organizational sections like a closing summary.")
+Avoid unnecessary politeness and organizational sections like a closing summary."
+                                  language)))
 
     (code-generation :type function
                      :args (:language)
@@ -748,7 +754,7 @@ Return the conversation-data alist."
             (max_tokens . ,ellm-max-tokens)
             (model . ,ellm-model)
             (title . nil)
-            (system . ,(ellm--get-system-message system-message-args))))
+            (system . ,(apply #'ellm--get-system-message system-message-args))))
          (contextualized-prompt (ellm--add-context-from-region prompt)))
     (ellm--add-user-message conversation contextualized-prompt)
     conversation))
@@ -1201,7 +1207,6 @@ It is assumed that the point is located at the beginning of a message."
 
 (defun ellm-org--at-headline-level-p (level &optional posn)
   "Check if the point is at a headline of the given `LEVEL'.
-
 If `POSN' is nil, the current point is used."
   (save-excursion
     (goto-char (or posn (point)))
@@ -1249,7 +1254,6 @@ is toggle on."
 
 (defun ellm-chat-at-point (&optional prompt)
   "Resume the conversation at point.
-
 The current buffer must be visiting `ellm-conversations-file' and
 the point be within some conversation subtree.
 In that case, that conversation is resumed with the next user message.
@@ -1264,7 +1268,6 @@ Optionally, the content of that message can be passed as the `PROMPT' argument."
 
 (defun ellm-chat-external (selection &optional id)
   "Entry point for making a prompt via `emacsclient'.
-
 The context of the next (or first) user message is passed
 as the `SELECTION' argument. Optionally, the `ID' of a previous
 conversation can be specified to continue that conversation."
@@ -1561,6 +1564,9 @@ Note that `FILENAME' should be an absolute path to the file."
 (defvar ellm--server-process nil
   "The process object for the ellm server.")
 
+(defconst ellm--server-buffer-name "*ellm server*"
+  "The name of the buffer used to display the ellm server output.")
+
 (defun ellm--server-running-p ()
   "Return non-nil if the ellm server is running."
   (and ellm--server-process (process-live-p ellm--server-process)))
@@ -1575,7 +1581,7 @@ Note that `FILENAME' should be an absolute path to the file."
       (unless openai-api-key
         (setenv "OPENAI_API_KEY" (funcall ellm-get-api-key)))
       (setq ellm--server-process
-            (start-process "ellm-server" "*ellm-server*"
+            (start-process "ellm-server" ellm--server-buffer-name
                            "node" "--trace-deprecation"
                            (expand-file-name "server.js")
                            "--host" ellm-server-host
@@ -1618,23 +1624,78 @@ Note that `FILENAME' should be an absolute path to the file."
                 (lambda (&key error-thrown &allow-other-keys)
                   (message "Error: %S" error-thrown)))))))
 
+(defvar ellm-context-overlays nil
+  "List of overlays representing context chunks.")
+
+(defconst ellm--context-buffer-name "*ellm context*"
+  "The name of the buffer used to display the context chunks.")
+
+(defun ellm-context-add ()
+  "Create an overlay for the current region and add it to `ellm-context-overlays'."
+  (interactive)
+  (if (use-region-p)
+      (let* ((start (region-beginning))
+             (end (region-end))
+             (overlay (make-overlay start end)))
+        (overlay-put overlay 'ellm-context t)
+        (overlay-put overlay 'face 'highlight)
+        (overlay-put overlay 'evaporate t)
+        (push overlay ellm-context-overlays)
+        (deactivate-mark)
+        (message "Context added"))
+    (message "No region selected")))
+
+(defun ellm--collect-contexts ()
+  "Collect the text from all context overlays."
+  (let ((context-buffer (get-buffer-create ellm--context-buffer-name)))
+    (with-current-buffer context-buffer
+      (erase-buffer)
+      (dolist (overlay ellm-context-overlays)
+        (let ((start (overlay-start overlay))
+              (end (overlay-end overlay))
+              (source-buffer (overlay-buffer overlay)))
+          (insert (with-current-buffer source-buffer
+                    (buffer-substring start end)))
+          (newline 2))))))
+
+(defun ellm-view-context ()
+  "View the context overlays in the current buffer."
+  (interactive)
+  (ellm--collect-contexts)
+  (pop-to-buffer ellm--context-buffer-name)
+  (goto-char (point-min))
+  (recenter 4))
+
+(defun ellm-clear-context ()
+  "Remove all context overlays."
+  (interactive)
+  (dolist (overlay ellm-context-overlays)
+    (delete-overlay overlay))
+  (setq ellm-context-overlays nil)
+  (message "All context chunks cleared"))
+
 ;;;###autoload
 (define-minor-mode ellm-mode
   "Minor mode for interacting with LLMs."
   :group 'ellm
   :lighter " ellm"
   :keymap (let ((map (make-sparse-keymap)))
-            (define-key map (kbd "C-c ; N") #'ellm-chat-at-point)
-            (define-key map (kbd "C-c ; n") #'ellm-chat)
-            (define-key map (kbd "C-c ; e") #'ellm-export-conversation)
-            (define-key map (kbd "C-c ; r") #'ellm-org-rate-response-and-refresh)
-            (define-key map (kbd "C-c ; c") #'ellm-set-config)
-            (define-key map (kbd "C-c ; ;") #'ellm-show-conversations-buffer)
-            (define-key map (kbd "C-c ; s") #'ellm-search-in-conversations)
-            (define-key map (kbd "C-c ; o") #'ellm-org-fold-conversations-buffer)
-            (define-key map (kbd "C-c ; j") #'ellm-org-next-message)
-            (define-key map (kbd "C-c ; k") #'ellm-org-previous-message)
-            map)
+    (define-key map (kbd "C-c ;") (make-sparse-keymap))
+    (define-key map (kbd "C-c ; N") #'ellm-chat-at-point)
+    (define-key map (kbd "C-c ; n") #'ellm-chat)
+    (define-key map (kbd "C-c ; e") #'ellm-export-conversation)
+    (define-key map (kbd "C-c ; r") #'ellm-org-rate-response-and-refresh)
+    (define-key map (kbd "C-c ; c") #'ellm-set-config)
+    (define-key map (kbd "C-c ; ;") #'ellm-show-conversations-buffer)
+    (define-key map (kbd "C-c ; s") #'ellm-search-in-conversations)
+    (define-key map (kbd "C-c ; o") #'ellm-org-fold-conversations-buffer)
+    (define-key map (kbd "C-c ; j") #'ellm-org-next-message)
+    (define-key map (kbd "C-c ; k") #'ellm-org-previous-message)
+    (define-key map (kbd "C-c ; C") (make-sparse-keymap))
+    (define-key map (kbd "C-c ; C a") #'ellm-context-add)
+    (define-key map (kbd "C-c ; C b") #'ellm-view-context)
+    (define-key map (kbd "C-c ; C C-k") #'ellm-clear-context)
+    map)
   :global nil
   (if ellm-mode
       (ellm-start-server)
