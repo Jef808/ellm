@@ -264,7 +264,7 @@ Your primary task is to assist with code generation, ensuring accuracy and effic
 When generating code, use the provided CONTEXT to tailor your responses to the user's needs.
 Provide well-commented, clean, and efficient code samples.
 If the problem can be solved in multiple ways, briefly state the options and recommend the most efficient one.
-When you encounter incomplete or ambiguous instructions, seek clarifications from the user.
+3When you encounter incomplete or ambiguous instructions, seek clarifications from the user.
 Maintain a focus on technical precision and completeness without redundant explanations or politeness."
                                       language))))
   "Alist mapping system message names to their content.
@@ -334,13 +334,19 @@ See `ellm--add-context-from-region' for usage details.")
                 (models-alist . ,ellm--mistral-models-alist))))
   "Alist mapping providers to their API configurations.")
 
+(defun ellm--get-system-messages ()
+  "Get the system messages."
+  (let ((system-messages (copy-alist ellm-system-messages)))
+    (if (boundp 'ellm-project-system-messages)
+      (append ellm-project-system-messages system-messages)
+      system-messages)))
+
 (defun ellm--get-system-message (&rest args)
   "Get the system message based on `ellm-current-system-message'.
-
 The `ARGS' should be keyword arguments corresponding to the signature of the
 system message function, if there are any."
   (unless ellm--test-mode
-    (let* ((message-entry (alist-get ellm-current-system-message ellm-system-messages))
+    (let* ((message-entry (alist-get ellm-current-system-message (ellm--get-system-messages)))
            (message-type (plist-get message-entry :type))
            (effective-system-message
             (cond
@@ -382,7 +388,7 @@ system message function, if there are any."
                                      (format
                                       (propertize (symbol-name (car cons-message))
                                                   'face 'font-lock-string-face)))
-                                 ellm-system-messages))))))
+                                 (ellm--get-system-messages)))))))
     (setq ellm-current-system-message sm)
     (message "...system message set to %s..." sm)))
 
@@ -1064,7 +1070,6 @@ Use `HEADLINE-CHAR' as the character for headlines."
 
 (defun ellm--stringify-message (message &optional headline-char)
   "Convert the `MESSAGE' to a string.
-
 A message of the form `((role . :role) (content . \"content\"))'
 is converted to the string \"[HC] Role\ncontent\" where [HC]
 is `HEADLINE-CHAR' or \"#\" by default."
@@ -1075,17 +1080,24 @@ is `HEADLINE-CHAR' or \"#\" by default."
 
 (defun ellm--markdown-to-org-sync (markdown-string)
   "Convert `MARKDOWN-STRING' from Markdown to Org using Pandoc."
-  (let* ((pandoc-command "pandoc -f markdown+tex_math_single_backslash -t org --shift-heading-level-by=1 --lua-filter=/home/jfa/projects/emacs/ellm/format_org.lua")
+  (let* ((pandoc-command
+          (concat "pandoc"
+                  " -f markdown+tex_math_single_backslash"
+                  " -t org"
+                  " --shift-heading-level-by=1"
+                  " --lua-filter=/home/jfa/projects/emacs/ellm/format_org.lua"))
          (org-string
           (with-temp-buffer
             (insert markdown-string)
-            (shell-command-on-region (point-min) (point-max) pandoc-command (current-buffer) t ellm--log-buffer-name)
-            (buffer-string))))
-    org-string))
+            (shell-command-on-region (point-min) (point-max)
+                                     pandoc-command
+                                     (current-buffer) 'no-mark
+                                     ellm--log-buffer-name)
+            (buffer-substring-no-properties (point-min) (point-max)))))
+         org-string))
 
 (defun ellm--resume-conversation (&optional id prompt)
   "Resume a previous conversation with given `ID'.
-
 Optionally, the `PROMPT' for the next user message can be passed as
 an argument.
 When `ID' is nil, it is assumed that the current point is within a conversation
@@ -1115,7 +1127,7 @@ The returned object is an org parse tree."
   "Parse the org subtree starting at `POSN' into a conversation object."
   (let* (conversation
          (properties (org-entry-properties posn))
-         (metadata (ellm-org--get-conversation-metadata properties));; (subtree (ellm--conversation-subtree))
+         (metadata (ellm-org--get-conversation-metadata properties))
          (title (alist-get "ITEM" properties nil nil 'equal))
          (effective-title (when (string-match org-element--timestamp-regexp title)
                             (s-trim (substring title 0 (match-beginning 0)))))
@@ -1267,15 +1279,15 @@ is temporarily highlighted to indicate they are new messages."
                (cl-find-if
                 (lambda (hl) (string-match-p "Assistant" (org-element-property :raw-value hl)))
                 headlines :from-end t))
-              (last-user-message-begin
+              (last-assistant-message-begin
                (org-element-property :begin last-assistant-message)))
         (with-selected-window (get-buffer-window (current-buffer))
-          (goto-char last-user-message-begin)
+          (goto-char last-assistant-message-begin)
           (recenter-top-bottom 4)
           (when highlight-last-message
             (save-excursion
               (org-end-of-subtree)
-              (pulse-momentary-highlight-region last-user-message-begin (point)))))
+              (pulse-momentary-highlight-region last-assistant-message-begin (point)))))
       (message "Last user message not found"))))
 
 (defun ellm-show-conversations-buffer (&optional buffer)
