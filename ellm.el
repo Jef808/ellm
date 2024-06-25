@@ -1576,10 +1576,11 @@ Note that `FILENAME' should be an absolute path to the file."
   "Start the ellm Node.js server."
   (interactive)
   (unless (ellm--server-running-p)
+    (ellm-set-provider 'openai)
     (let ((default-directory (file-name-directory (locate-library "ellm")))
-          (openai-api-key (ellm--get-openai-api-key-from-env)))
+          (openai-api-key (ellm-get-api-key-from-env)))
       (unless openai-api-key
-        (setenv "OPENAI_API_KEY" (funcall ellm-get-openai-api-key)))
+        (setenv "OPENAI_API_KEY" (funcall ellm-get-api-key)))
       (setq ellm--server-process
             (start-process "ellm-server" "*ellm-server*"
                            "node" "--trace-deprecation"
