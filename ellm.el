@@ -538,7 +538,6 @@ system message function, if there are any."
 
 (defun ellm-toggle-test-mode ()
   "Set LLM parameters to lowest token cost for testing purposes.
-
 When togling off, restore the previously set values."
   (interactive)
   (if ellm--test-mode
@@ -901,7 +900,8 @@ Example usage:
                              "Enter your next prompt: "
                            "Enter your prompt: "))
          (prompt (or user-prompt (read-string prompt-message nil 'ellm--prompt-history)))
-         (wrapped-prompt (funcall prompt-wrapper prompt))
+         (wrapper (or prompt-wrapper 'identity))
+         (wrapped-prompt (funcall wrapper prompt))
          (buffer (or conversations-buffer
                      (if ellm-save-conversations
                          (ellm-conversations-buffer-from-project)
@@ -927,7 +927,6 @@ Example usage:
 
 (defun ellm--handle-response (status conversations-buffer conversation)
   "Handle the response to the prompt made using `CONVERSATION'.
-
 Information about the response is contained in `STATUS' (see `url-retrieve').
 The response is added to the `CONVERSATION' and the conversation is added or
 updated in the `CONVERSATIONS-BUFFER'."
@@ -949,7 +948,6 @@ updated in the `CONVERSATIONS-BUFFER'."
 
 (defun ellm--add-response-to-conversation (conversations-buffer conversation response)
   "Process the `RESPONSE' from the API call made with config `CONVERSATION'.
-
 The `RESPONSE' should be an emacs-lisp hash table.
 The `CONVERSATION' is then added to the `CONVERSATIONS-BUFFER'."
   (unless (hash-table-p response)
@@ -964,7 +962,6 @@ The `CONVERSATION' is then added to the `CONVERSATIONS-BUFFER'."
 
 (defun ellm--handle-assistant-response (response conversation)
   "Add the `RESPONSE' to the `CONVERSATION'.
-
 The `RESPONSE' is expected to be a string."
   (unless (stringp response)
     (error "ellm--handle-assistant-response: Expected string, got %s" (type-of response)))
@@ -1359,13 +1356,10 @@ conversation, or throws an error otherwise."
 
 (defun ellm--goto-first-top-level-heading ()
   "Move the point to the first top-level heading in the current buffer.
-
 This function is specifically designed for Org mode buffers. It starts at the
 beginning of the buffer and then navigates to the first top-level heading.
-
 If the buffer is empty or does not contain any top-level headings, the point
 will remain at the beginning of the buffer.
-
 Note: This function relies on the `org-goto-first-child` function from the
 Org mode library. Ensure that Org mode is properly installed and loaded before
 using this function."
@@ -1374,20 +1368,16 @@ using this function."
 
 (defun ellm--setup-persistance ()
   "Register ellm configuration variables with the `savehist' package.
-
 This function is responsible for maintaining the persistence of certain
 configuration variables used by the ellm package. It does this by adding
 those variables to the `savehist-additional-variables' list. This ensures
 that the values of these variables are saved and restored across Emacs
 sessions.
-
 The variables that are registered for persistence are
 `ellm-current-system-message', `ellm-max-tokens', `ellm-model-size',
 `ellm-provider', `ellm-temperature' and `ellm--debug-mode'.
-
 Additionally, the `ellm--prompt-history' is persisted to maintain the prompt
 history.
-
 This function does not take any arguments and returns nil."
   (let ((symbols-to-add '(ellm-current-system-message
                           ellm-max-tokens
@@ -1549,7 +1539,6 @@ When at the top of the conversation, fold the subtree."
 
 (defun ellm-extract-and-save-definitions-in-json (filename)
   "Extract and save all definitions in the current buffer to `FILENAME'.
-
 Note that `FILENAME' should be an absolute path to the file."
   (interactive "FEnter filename to save definitions: ")
   (let* ((definitions (ellm--describe-symbols "ellm-"))
@@ -1646,7 +1635,6 @@ Note that `FILENAME' should be an absolute path to the file."
   (let ((context-buffer (get-buffer-create ellm--context-buffer-name))
         (inhibit-read-only t))
     (with-current-buffer context-buffer
-      (erase-buffer)
       (view-mode 1)
       (ellm-context-buffer-mode 1))
     context-buffer))
@@ -1659,12 +1647,30 @@ Note that `FILENAME' should be an absolute path to the file."
 (defun ellm--context-at (posn)
   "Return the context overlay at position `POSN'."
   (let ((overlays (overlays-at posn)))
-    (seq-find (lambda (ov) (overlay-get ov 'ellm-context)) overlays)))
+    (seq-find #'ellm--overlay-context-overlay-p overlays)))
 
 (defun ellm--contexts-in-region (beg end)
   "Return the context overlays in the region between `BEG' and `END'."
   (let ((overlays (overlays-in beg end)))
     (seq-filter (lambda (ov) (overlay-get ov 'ellm-context)) overlays)))
+
+(defun ellm--context-buffer-overlay (overlay)
+  "Return the context overlay in the context buffer corresponding to `OVERLAY'."
+  (unless (and (ellm--overlay-context-overlay-p overlay)
+               (buffer-live-p (overlay-buffer overlay)))
+    (error "Not a valid context chunk overlay: %S" overlay))
+  (if (buffer-match-p ellm--context-buffer-name (overlay-buffer overlay))
+      overlay (overlay-get overlay 'ellm-other-overlay)))
+
+(defun ellm--overlay-context-overlay-p (overlay)
+  "Return non-nil if `OVERLAY' is a context overlay."
+  (overlay-get overlay 'ellm-context))
+
+(defun ellm--overlay-empty-p (overlay)
+  "Return non-nil if `OVERLAY' is empty or deleted."
+  (or (null (overlay-buffer overlay))
+      (not (buffer-live-p (overlay-buffer overlay)))
+      (= (overlay-start overlay) (overlay-end overlay))))
 
 (defun ellm-add-context-chunk ()
    "Create an overlay for the current region and add it to `ellm-context-overlays'."
@@ -1673,8 +1679,7 @@ Note that `FILENAME' should be an absolute path to the file."
        (let* ((start (region-beginning))
               (end (region-end))
               (overlay (make-overlay start end)))
-         (dolist (ov (ellm--contexts-in-region start end))
-           (ellm-remove-context-chunk ov))
+         (seq-do #'ellm-remove-context-chunk (ellm--contexts-in-region start end))
          (ellm--insert-context-content overlay)
          (overlay-put overlay 'ellm-context t)
          (overlay-put overlay 'face ellm-context-face)
@@ -1705,32 +1710,36 @@ of the original context chunks."
            (overlay-put new-overlay 'ellm-other-overlay overlay)
            (overlay-put overlay 'ellm-other-overlay new-overlay))))))
 
- (defun ellm-remove-context-chunk (&optional overlay)
-   "Remove the content of the `OVERLAY' from the context buffer."
-   (interactive)
-   (unless overlay
-     (setq overlay (ellm--context-at (point))))
-   (unless overlay
-     (error "No context overlay at point: %S" (point)))
-   (unless (overlay-get overlay 'ellm-context)
-     (error "Not a valid context overlay: %S" overlay))
-   (let* ((buffer
-           (overlay-get overlay 'ellm-context-buffer-overlay))
-          (context-buffer-ov-p (buffer-match-p buffer ellm--context-buffer-name))
-          (other-overlay (overlay-get overlay 'ellm-other-overlay))
-          (context-buffer-ov (if context-buffer-ov-p overlay other-overlay))
-          (context-ov (if context-buffer-ov-p other-overlay overlay)))
-     (with-current-buffer ellm--context-buffer-name
-       (let ((start (overlay-start context-buffer-ov))
-             (end
-              (save-excursion
-                (goto-char (overlay-end context-buffer-ov))
-                (line-end-position 3)))
-             (inhibit-read-only t))
-         (delete-region start end)))
-     (delete-overlay context-buffer-ov)
-     (delete-overlay context-ov)
-     (setq ellm-context-overlays (delq context-ov ellm-context-overlays))))
+(defun ellm--try-delete-context-content (overlay)
+  "Delete the content of the `OVERLAY' from the context buffer.
+If the overlay is not in the context buffer, is empty, deleted or
+is not found, do nothing."
+  (when (and overlay
+             (not (ellm--overlay-empty-p overlay))
+             (buffer-match-p ellm--context-buffer-name (overlay-buffer overlay))
+    (with-current-buffer (overlay-buffer overlay)
+      (let ((inhibit-read-only t)
+            (start (overlay-start overlay))
+            (end (overlay-end overlay)))
+        (when (and start end)
+          (delete-region start end)
+          (delete-blank-lines)))))))
+
+(defun ellm-remove-context-chunk (&optional overlay)
+  "Remove the content of the `OVERLAY' from the context buffer."
+  (interactive)
+  (when overlay
+    (unless (ellm--overlay-context-overlay-p overlay)
+      (error "Not a valid context overlay: %S" overlay)))
+  (unless (or overlay (setq overlay (ellm--context-at (point))))
+    (error "No context overlay at point: %S" (point)))
+  (let* ((context-buffer-ov (ellm--context-buffer-overlay overlay))
+         (context-ov (if (null context-buffer-ov) overlay
+                       (overlay-get context-buffer-ov 'ellm-other-overlay))))
+    (ellm--try-delete-context-content context-buffer-ov)
+    (delete-overlay context-buffer-ov)
+    (delete-overlay context-ov)
+    (setq ellm-context-overlays (delq context-ov ellm-context-overlays))))
 
 (defun ellm-view-context-buffer ()
   "View the context overlays in the current buffer."
@@ -1740,50 +1749,40 @@ of the original context chunks."
     (goto-char (point-min))
     (recenter 4)))
 
-(defun ellm-sync-context-buffer ()
-  "Sync the context buffer with the saved context overlays."
-  (interactive)
-  (let* ((context-buffer (ellm--get-or-create-context-buffer))
-         (context-chunks-in-buffer
-          (with-current-buffer context-buffer
-            (overlays-in (point-min) (point-max))))
-         (context-chunks-extra (seq-filter (lambda (ov) (and (overlay-get ov 'ellm-context)
-                                                             (not (memq (overlay-get ov 'ellm-other-overlay) ellm-context-overlays))))
-                                           context-chunks-in-buffer))
-         (context-chunks-missing (seq-filter (lambda (ov) (memq (overlay-get ov 'ellm-other-overlay) ellm-context-overlays))
-                                             context-chunks-in-buffer)))
-    (dolist (ov context-chunks-extra)
-      (ellm-remove-context-chunk ov))
-    (dolist (ov context-chunks-missing)
-      (ellm--insert-context-content ov))))
-
 (defun ellm-clear-context ()
   "Remove all context overlays."
   (interactive)
-  (dolist (overlay ellm-context-overlays)
-    (delete-overlay overlay))
+  (seq-do #'delete-overlay ellm-context-overlays)
   (setq ellm-context-overlays nil)
-  (ellm--context-buffer-setup)
+  (when-let ((context-buffer (get-buffer ellm--context-buffer-name)))
+    (when (buffer-live-p context-buffer)
+      (with-current-buffer (ellm--get-or-create-context-buffer)
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (seq-do #'delete-overlay (overlays-in (point-min) (point-max)))))))
   (message "All context chunks cleared"))
 
-(defun ellm-complete-context ()
+(defun ellm-context--build-prompt-wrapper ()
   "Use the context accumulated in the context buffer for a prompt."
+  (if-let* ((string-template
+               (if (eq ellm-provider 'anthropic)
+                   ellm-prompt-context-fmt-string-anthropic ellm-prompt-context-fmt-string))
+              (context-string
+               (with-current-buffer (ellm--get-or-create-context-buffer)
+                 (buffer-substring-no-properties (point-min) (point-max)))))
+      (lambda (prompt)
+        (format string-template nil context-string prompt))))
+
+(defun ellm-context-complete ()
+  "Complete the context in the context buffer."
   (interactive)
-  (ellm-sync-context-buffer)
-  (with-current-buffer ellm--context-buffer-name
-    (let* ((context (buffer-substring-no-properties (point-min) (point-max)))
-           (string-template
-            (if (eq ellm-provider 'anthropic)
-                ellm-prompt-context-fmt-string-anthropic
-              ellm-prompt-context-fmt-string))
-           (prompt-wrapper-func
-            (lambda (prompt)
-              (format string-template nil context prompt))))
-      (ellm-chat nil nil prompt-wrapper-func))))
+  (let ((prompt-wrapper (ellm-context--build-prompt-wrapper)))
+    (ellm-chat nil nil prompt-wrapper)))
 
 (defvar ellm-context-buffer-keymap
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") 'ellm-complete-context)
+    (define-key map (kbd "d") 'ellm-remove-context-chunk)
     map))
 
 (define-minor-mode ellm-context-buffer-mode
@@ -1815,8 +1814,14 @@ of the original context chunks."
     map)
   :global nil
   (if ellm-mode
-      (ellm-start-server)
-    (ellm-stop-server)))
+      (progn
+        (ellm-start-server)
+        (ellm--context-buffer-setup))
+    (progn
+      (ellm-stop-server)
+      (mapc #'kill-buffer '(ellm--context-buffer-name
+                            ellm--log-buffer-name
+                            ellm--temp-conversations-buffer-name)))))
 
 ;;;###autoload
 (define-globalized-minor-mode global-ellm-mode ellm-mode
