@@ -754,9 +754,8 @@ Return the conversation-data alist."
             (max_tokens . ,ellm-max-tokens)
             (model . ,ellm-model)
             (title . nil)
-            (system . ,(apply #'ellm--get-system-message system-message-args))))
-         (contextualized-prompt (ellm--add-context-from-region prompt)))
-    (ellm--add-user-message conversation contextualized-prompt)
+            (system . ,(apply #'ellm--get-system-message system-message-args)))))
+    (ellm--add-user-message conversation prompt)
     conversation))
 
 (defun ellm--prepare-request-headers (conversation)
@@ -850,70 +849,68 @@ with a non-nil MAYBE-PROMPT argument."
                     ".org"))))
     (find-file-noselect filepath)))
 
-(defun ellm-chat (&optional current-conversation conversations-buffer next-prompt)
+(defun ellm-chat (&optional current-conversation conversations-buffer prompt-wrapper user-prompt)
   "Send a request to the current provider's chat completion endpoint.
-
-This function serves as the main entry point for interacting with the `ellm`
+This function serves as the main entry point for interacting with the `ellm'
 package, which facilitates chat-based communication with a specified model
 provider.
-
 Arguments:
-- `CURRENT-CONVERSATION` (optional): A conversation object representing the
+- `CURRENT-CONVERSATION' (optional): A conversation object representing the
 ongoing
  conversation. If provided, the conversation will be continued with the next
 prompt
  and the associated response. If nil, a new conversation will be initialized.
-- `CONVERSATIONS-BUFFER` (optional): A string representing the file path where
+- `CONVERSATIONS-BUFFER' (optional): A string representing the file path where
 the conversation should be saved. If nil, the conversation will be saved to a
-default location determined by the `ellm-conversations-buffer-from-project`
+default location determined by the `ellm-conversations-buffer-from-project'
 function.
-- `NEXT-PROMPT` (optional): A string representing the next prompt to be sent to
+- `PROMPT-WRAPPER'
+- `USER-PROMPT' (optional): A string representing the prompt to be sent to
 the model provider. If nil, the prompt will be read interactively from the
 minibuffer.
-
 Behavior:
 1. The function determines the prompt message based on whether
-`CURRENT-CONVERSATION` is provided.
-2. It reads the prompt either from `NEXT-PROMPT` or interactively from the
+`CURRENT-CONVERSATION' is provided.
+2. It reads the prompt either from `USER-PROMPT' or interactively from the
 minibuffer.
 3. It determines the file path for saving the conversation using
-`CONVERSATIONS-BUFFER` or a default method.
+`CONVERSATIONS-BUFFER' or a default method.
 4. It updates the conversation object by adding the user's message if
-`CURRENT-CONVERSATION` is provided,
+`CURRENT-CONVERSATION' is provided,
    or initializes a new conversation if not.
 5. It constructs the URL for the request using the conversation provider.
 6. It prepares the request headers and body based on the conversation provider.
-7. It sets the HTTP method to \"POST\" and configures the request with the
+7. It sets the HTTP method to POST and configures the request with the
 prepared headers and body.
 8. It logs the request details for debugging purposes.
 9. It sends the request to the model provider's endpoint and specifies
-`ellm--handle-response` as the callback
+`ellm--handle-response' as the callback
    function to handle the response.
 10. It displays a message indicating that it is waiting for a response from the
 model provider.
-
 Returns:
 - Always returns nil.
-
 Example usage:
   (ellm-chat)
   (ellm-chat my-conversation)
   (ellm-chat nil nil \"What is the weather today?\")
   (ellm-chat my-conversation
-   (buffer-get \"conversations-general.org\") \"Tell me a joke.\")"
+  (buffer-get \"conversations-general.org\") \"Tell me a joke.\")"
   (interactive)
   (let* ((prompt-message (if current-conversation
                              "Enter your next prompt: "
                            "Enter your prompt: "))
-         (prompt (or next-prompt (read-string prompt-message nil 'ellm--prompt-history)))
+         (prompt (or user-prompt (read-string prompt-message nil 'ellm--prompt-history)))
+         (wrapped-prompt (funcall prompt-wrapper prompt))
          (buffer (or conversations-buffer
                      (if ellm-save-conversations
                          (ellm-conversations-buffer-from-project)
                        (get-buffer-create ellm--temp-conversations-buffer-name))))
-         (conversation (or
-                        (and current-conversation
-                             (ellm--add-user-message current-conversation prompt))
-                        (ellm--initialize-conversation prompt)))
+         (conversation (if current-conversation
+                           (progn
+                             (ellm--add-user-message current-conversation wrapped-prompt)
+                             current-conversation)
+                         (ellm--initialize-conversation wrapped-prompt)))
          (url (ellm--get-url conversation))
          (request-headers (ellm--prepare-request-headers conversation))
          (request-body (ellm--prepare-request-body conversation))
@@ -1624,9 +1621,6 @@ Note that `FILENAME' should be an absolute path to the file."
                 (lambda (&key error-thrown &allow-other-keys)
                   (message "Error: %S" error-thrown)))))))
 
-(defvar ellm-context-overlays nil
-  "List of overlays representing context chunks.")
-
 (defconst ellm--context-buffer-name "*ellm context*"
   "The name of the buffer used to display the context chunks.")
 
@@ -1644,16 +1638,23 @@ Note that `FILENAME' should be an absolute path to the file."
   :group 'ellm)
 (defvar ellm-context-face 'ellm-context-face)
 
+(defvar ellm-context-overlays nil
+  "List of overlays representing context chunks.")
+
 (defun ellm--context-buffer-setup ()
   "Setup the context buffer."
   (let ((context-buffer (get-buffer-create ellm--context-buffer-name))
         (inhibit-read-only t))
     (with-current-buffer context-buffer
       (erase-buffer)
-      (insert "## CONTEXT")
-      (newline 2)
-      (view-mode 1))
+      (view-mode 1)
+      (ellm-context-buffer-mode 1))
     context-buffer))
+
+(defun ellm--get-or-create-context-buffer ()
+  "Return the context buffer, setting it up it does not exist."
+  (or (get-buffer ellm--context-buffer-name)
+      (ellm--context-buffer-setup)))
 
 (defun ellm--context-at (posn)
   "Return the context overlay at position `POSN'."
@@ -1685,8 +1686,8 @@ Note that `FILENAME' should be an absolute path to the file."
 
 (defun ellm--insert-context-content (overlay)
    "Insert the content of the `OVERLAY' into the context buffer.
- We create a corresponding overlay in the context buffer to keep track of the
- original context chunks."
+We create a corresponding overlay in the context buffer to keep track
+of the original context chunks."
    (let ((start (overlay-start overlay))
          (end (overlay-end overlay))
          (source-buffer (overlay-buffer overlay)))
@@ -1734,12 +1735,27 @@ Note that `FILENAME' should be an absolute path to the file."
 (defun ellm-view-context-buffer ()
   "View the context overlays in the current buffer."
   (interactive)
-  (let ((buffer
-         (or (get-buffer ellm--context-buffer-name)
-             (ellm--context-buffer-setup))))
+  (let ((buffer (ellm--get-or-create-context-buffer)))
     (pop-to-buffer buffer)
     (goto-char (point-min))
     (recenter 4)))
+
+(defun ellm-sync-context-buffer ()
+  "Sync the context buffer with the saved context overlays."
+  (interactive)
+  (let* ((context-buffer (ellm--get-or-create-context-buffer))
+         (context-chunks-in-buffer
+          (with-current-buffer context-buffer
+            (overlays-in (point-min) (point-max))))
+         (context-chunks-extra (seq-filter (lambda (ov) (and (overlay-get ov 'ellm-context)
+                                                             (not (memq (overlay-get ov 'ellm-other-overlay) ellm-context-overlays))))
+                                           context-chunks-in-buffer))
+         (context-chunks-missing (seq-filter (lambda (ov) (memq (overlay-get ov 'ellm-other-overlay) ellm-context-overlays))
+                                             context-chunks-in-buffer)))
+    (dolist (ov context-chunks-extra)
+      (ellm-remove-context-chunk ov))
+    (dolist (ov context-chunks-missing)
+      (ellm--insert-context-content ov))))
 
 (defun ellm-clear-context ()
   "Remove all context overlays."
@@ -1749,6 +1765,31 @@ Note that `FILENAME' should be an absolute path to the file."
   (setq ellm-context-overlays nil)
   (ellm--context-buffer-setup)
   (message "All context chunks cleared"))
+
+(defun ellm-complete-context ()
+  "Use the context accumulated in the context buffer for a prompt."
+  (interactive)
+  (ellm-sync-context-buffer)
+  (with-current-buffer ellm--context-buffer-name
+    (let* ((context (buffer-substring-no-properties (point-min) (point-max)))
+           (string-template
+            (if (eq ellm-provider 'anthropic)
+                ellm-prompt-context-fmt-string-anthropic
+              ellm-prompt-context-fmt-string))
+           (prompt-wrapper-func
+            (lambda (prompt)
+              (format string-template nil context prompt))))
+      (ellm-chat nil nil prompt-wrapper-func))))
+
+(defvar ellm-context-buffer-keymap
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") 'ellm-complete-context)
+    map))
+
+(define-minor-mode ellm-context-buffer-mode
+  "Minor mode for collecting the context in ellm."
+  :lighter " ellm-context"
+  :keymap ellm-context-buffer-keymap)
 
 ;;;###autoload
 (define-minor-mode ellm-mode
