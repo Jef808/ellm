@@ -282,13 +282,13 @@ instructions for the language models in new conversations."
   "The index of the current system message in `ellm-system-messages'.")
 
 (defvar ellm-prompt-context-fmt-string
-  "## CONTEXT:\n```%s\n%s\n```\n\n## PROMPT:\n%s"
+  "## CONTEXT:\n%s\n\n## PROMPT:\n%s"
   "The format string to use with `format' for building the context message.
 This message will be prepended to the first user prompt of a conversation.
 See `ellm--add-context-from-region' for usage details.")
 
 (defvar ellm-prompt-context-fmt-string-anthropic
-  "<context>\n```%s\n%s\n```\n</context>\n<prompt>\n%s\n</prompt>"
+  "<context>\n%s\n</context>\n\n<prompt>\n%s\n</prompt>"
   "The format string to use with `format' for building the context message.
 This message will be prepended to the first user prompt of a conversation.
 See `ellm--add-context-from-region' for usage details.")
@@ -748,14 +748,15 @@ Return the conversation-data alist."
                                (string-remove-suffix "-mode")
                                (string-remove-suffix "-ts")))))
          (conversation
-          `((messages . nil)
-            (temperature . ,ellm-temperature)
-            (max_tokens . ,ellm-max-tokens)
-            (model . ,ellm-model)
-            (title . nil)
-            (system . ,(apply #'ellm--get-system-message system-message-args)))))
-    (ellm--add-user-message conversation prompt)
-    conversation))
+          (list
+           (cons 'messages (list))
+           (cons 'temperature ellm-temperature)
+           (cons 'max_tokens ellm-max-tokens)
+           (cons 'model ellm-model)
+           (cons 'title nil)
+           (cons 'system (apply #'ellm--get-system-message system-message-args)))))
+         (ellm--add-user-message conversation prompt)
+         conversation))
 
 (defun ellm--prepare-request-headers (conversation)
   "Prepare the API call body to send `CONVERSATION'."
@@ -983,11 +984,9 @@ The `RESPONSE' is expected to be a string."
          (id (alist-get 'id conversation))
          (stringified-previous-messages (ellm--messages-to-string previous-messages "**"))
          (org-formatted-new-messages (ellm--convert-messages-to-org new-messages))
-         (messages-to-insert (if stringified-previous-messages
-                                 (concat stringified-previous-messages
-                                         "\n\n"
-                                         org-formatted-new-messages)
-                               org-formatted-new-messages)))
+         (messages-to-insert (concat stringified-previous-messages
+                                     (unless (string-empty-p stringified-previous-messages) "\n\n")
+                                     org-formatted-new-messages)))
     (ellm--log messages-to-insert "MESSAGES-TO-INSERT")
     (with-current-buffer conversations-buffer
       (let ((inhibit-read-only t))
@@ -1632,12 +1631,9 @@ Note that `FILENAME' should be an absolute path to the file."
 
 (defun ellm--context-buffer-setup ()
   "Setup the context buffer."
-  (let ((context-buffer (get-buffer-create ellm--context-buffer-name))
-        (inhibit-read-only t))
-    (with-current-buffer context-buffer
-      (view-mode 1)
-      (ellm-context-buffer-mode 1))
-    context-buffer))
+  (with-current-buffer (get-buffer-create ellm--context-buffer-name)
+    (ellm-context-buffer-mode)
+    (current-buffer)))
 
 (defun ellm--get-or-create-context-buffer ()
   "Return the context buffer, setting it up it does not exist."
@@ -1688,6 +1684,27 @@ Note that `FILENAME' should be an absolute path to the file."
          (deactivate-mark)
          (message "Context added"))
      (message "No region selected")))
+
+(defun ellm--prepare-context-chunk (overlay)
+  "Prepare the context chunk of `OVERLAY' for making a prompt.
+If the `OVERLAY' has a non-nil `ellm-language' property, the
+text content of the context chunk is wrapped in triple backticks
+and the value of the `ellm-language' is used as the language
+attribute."
+  (with-current-buffer (overlay-buffer overlay)
+    (s-trim-right
+     (let* ((buffer (overlay-buffer (overlay-get overlay 'ellm-other-overlay)))
+            (language (with-current-buffer buffer
+                        (thread-last
+		          (symbol-name major-mode)
+		          (string-remove-suffix "-mode")
+		          (string-remove-suffix "-ts"))))
+	    (start (overlay-start overlay))
+	    (end (overlay-end overlay))
+	    (content (buffer-substring-no-properties start end)))
+       (if language
+	   (format "```%s\n%s\n```\n\n" language content)
+         (format "```\n%s\n```\n\n" content))))))
 
 (defun ellm--insert-context-content (overlay)
    "Insert the content of the `OVERLAY' into the context buffer.
@@ -1765,11 +1782,16 @@ is not found, do nothing."
 (defun ellm-context--build-prompt-wrapper ()
   "Use the context accumulated in the context buffer for a prompt."
   (if-let* ((string-template
-               (if (eq ellm-provider 'anthropic)
-                   ellm-prompt-context-fmt-string-anthropic ellm-prompt-context-fmt-string))
-              (context-string
-               (with-current-buffer (ellm--get-or-create-context-buffer)
-                 (buffer-substring-no-properties (point-min) (point-max)))))
+             (if (eq ellm-provider 'anthropic)
+                 ellm-prompt-context-fmt-string-anthropic ellm-prompt-context-fmt-string))
+            (context-overlays
+             (seq-filter
+              #'ellm--overlay-context-overlay-p
+              (with-current-buffer (ellm--get-or-create-context-buffer)
+                (overlays-in (point-min) (point-max)))))
+            (context-string
+             (mapconcat (lambda (ov) (ellm--prepare-context-chunk ov))
+                        context-overlays)))
       (lambda (prompt)
         (format string-template nil context-string prompt))))
 
@@ -1783,12 +1805,12 @@ is not found, do nothing."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") 'ellm-complete-context)
     (define-key map (kbd "d") 'ellm-remove-context-chunk)
-    map))
+    map)
+  "Keymap for `ellm-context-buffer-mode'.")
 
-(define-minor-mode ellm-context-buffer-mode
-  "Minor mode for collecting the context in ellm."
-  :lighter " ellm-context"
-  :keymap ellm-context-buffer-keymap)
+(define-derived-mode ellm-context-buffer-mode special-mode "ellm-context"
+  "Major mode for managing the ellm context buffer."
+  (use-local-map ellm-context-buffer-keymap))
 
 ;;;###autoload
 (define-minor-mode ellm-mode
@@ -1798,7 +1820,7 @@ is not found, do nothing."
   :keymap (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c ;") (make-sparse-keymap))
     (define-key map (kbd "C-c ; N") #'ellm-chat-at-point)
-    (define-key map (kbd "C-c ; n") #'ellm-chat)
+    (define-key map (kbd "C-c ; n") #'ellm-context-complete)
     (define-key map (kbd "C-c ; e") #'ellm-export-conversation)
     (define-key map (kbd "C-c ; r") #'ellm-org-rate-response-and-refresh)
     (define-key map (kbd "C-c ; c") #'ellm-set-config)
@@ -1813,21 +1835,16 @@ is not found, do nothing."
     (define-key map (kbd "C-c ; C-M-k") #'ellm-clear-context)
     map)
   :global nil
-  (if ellm-mode
-      (progn
-        (ellm-start-server)
-        (ellm--context-buffer-setup))
-    (progn
-      (ellm-stop-server)
-      (mapc #'kill-buffer '(ellm--context-buffer-name
-                            ellm--log-buffer-name
-                            ellm--temp-conversations-buffer-name)))))
+  (unless ellm-mode
+    (dolist (buffer '(ellm--context-buffer-name
+                      ellm--log-buffer-name
+                      ellm--temp-conversations-buffer-name))
+      (ignore-errors (kill-buffer buffer)))))
 
 ;;;###autoload
 (define-globalized-minor-mode global-ellm-mode ellm-mode
   (lambda ()
-    (ellm--setup-persistance)
-    (ellm-mode 1))
+    (ellm-mode))
   :global t
   :group 'ellm)
 
