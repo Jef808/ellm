@@ -447,7 +447,7 @@ system message function, if there are any."
 (defun ellm-set-max-tokens (&optional max-tokens)
   "Set the `MAX-TOKENS' to use for the LLM prompt."
   (interactive)
-  (if (called-interactively-p 'any)
+  (if (called-interactively-p 'interactive)
     (let (mt)
       (while (not (and (setq mt (read-number "Max tokens (between 1 and 4096): "))
                        (ellm--validation-max-tokens mt)))
@@ -479,13 +479,11 @@ system message function, if there are any."
 (defun ellm-set-config ()
   "Call the `SETTING-FUNCTION' according to the user's choice."
   (interactive)
-  (let ((minibuffer-local-map (copy-keymap minibuffer-local-map))
-        (setting-function))
+  (let ((minibuffer-local-map (copy-keymap minibuffer-local-map)))
     (define-key minibuffer-local-map (kbd "q") 'keyboard-quit)
     (let ((minibuffer-allow-text-properties t)
           (minibuffer-local-map minibuffer-local-map))
-      (while (setq setting-function (ellm--config-prompt))
-        (funcall-interactively setting-function)))))
+      (while (funcall-interactively (ellm--config-prompt))))))
 
 (defun ellm--config-prompt ()
   "Prompt the user to choose a setting to configure."
@@ -500,8 +498,7 @@ system message function, if there are any."
                   (cons (ellm--system-message-description) 'ellm-set-system-message)))
         (minibuffer-local-map (copy-keymap minibuffer-local-map)))
     (define-key minibuffer-local-map (kbd "q") 'abort-recursive-edit)
-    (let ((minibuffer-allow-text-properties t)
-          (minibuffer-local-map minibuffer-local-map))
+    (let ((minibuffer-allow-text-properties t))
       (alist-get
        (completing-read "Choose a setting to configure: " (mapcar 'car choices))
        choices nil nil 'equal))))
@@ -716,9 +713,27 @@ Similar to `push', but for the end of the list."
              (nconc ,place (list ,element))
            (list ,element))))
 
-(defun ellm--make-message (role content)
-  "Create a message with the given `ROLE' and `CONTENT'."
-  `((role . ,role) (content . ,(encode-coding-string content 'utf-8))))
+(defun ellm--make-message (role content &optional image-path)
+  "Create a message with the given `ROLE' and `CONTENT'.
+If `IMAGE-PATH' is provided, create an image message instead."
+  (if image-path
+      (ellm--make-image-message role image-path)
+    `((role . ,role) (content . ,(encode-coding-string content 'utf-8)))))
+
+(defun ellm--make-image-message (role image-path)
+  "Create an image message with the given `ROLE' and `IMAGE-PATH'."
+  (let* ((file-extension (file-name-extension image-path))
+         (media-type (cond ((member file-extension '("jpg" "jpeg")) "image/jpeg")
+                           ((string= file-extension "png") "image/png")
+                           (t (error "Unsupported image format: %s" file-extension))))
+         (base64-data (with-temp-buffer
+                        (insert-file-contents-literally image-path)
+                        (base64-encode-string (buffer-string) t))))
+    `((role . ,role)
+      (content . ((type . "image")
+                  (source . ((type . "base64")
+                             (media_type . ,media-type)
+                             (data . ,base64-data))))))))
 
 (defun ellm--add-system-message (content conversation)
   "Add a system message with `CONTENT' to the `CONVERSATION'.
@@ -934,6 +949,7 @@ updated in the `CONVERSATIONS-BUFFER'."
   (message "...Received response from %s..."
            (symbol-name (ellm--get-model-provider conversation)))
   (cond ((plist-get status :error)
+         (message "http error: %s" (elt (plist-get status :error) 2))
          (ellm--log status "HTTP-ERROR"))
         ((plist-get status :redirect)
          (ellm--log status "HTTP-REDIRECT"))
@@ -1793,7 +1809,7 @@ is not found, do nothing."
              (mapconcat (lambda (ov) (ellm--prepare-context-chunk ov))
                         context-overlays)))
       (lambda (prompt)
-        (format string-template nil context-string prompt))))
+        (format string-template context-string prompt))))
 
 (defun ellm-context-complete ()
   "Complete the context in the context buffer."
