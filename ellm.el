@@ -282,7 +282,7 @@ instructions for the language models in new conversations."
   "The index of the current system message in `ellm-system-messages'.")
 
 (defvar ellm-prompt-context-fmt-string
-  "## CONTEXT:\n%s\n\n## PROMPT:\n%s"
+  "## CONTEXT:\n%s\n\n## PROMPT:\n%s\n"
   "The format string to use with `format' for building the context message.
 This message will be prepended to the first user prompt of a conversation.
 See `ellm--add-context-from-region' for usage details.")
@@ -488,13 +488,13 @@ system message function, if there are any."
   "Prompt the user to choose a setting to configure."
   (let ((choices (list
                   (cons (ellm--toggle-test-mode-description) #'ellm-toggle-test-mode)
-                  (cons (ellm--toggle-save-conversations-description) 'ellm-toggle-save-conversations)
-                  (cons (ellm--toggle-debug-mode-description) 'ellm-toggle-debug-mode)
-                  (cons (ellm--provider-description) 'ellm-set-provider)
-                  (cons (ellm--model-size-description) 'ellm-set-model-size)
-                  (cons (ellm--temperature-description) 'ellm-set-temperature)
+                  (cons (ellm--toggle-save-conversations-description) #'ellm-toggle-save-conversations)
+                  (cons (ellm--toggle-debug-mode-description) #'ellm-toggle-debug-mode)
+                  (cons (ellm--provider-description) #'ellm-set-provider)
+                  (cons (ellm--model-size-description) #'ellm-set-model-size)
+                  (cons (ellm--temperature-description) #'ellm-set-temperature)
                   (cons (ellm--max-tokens-description) #'ellm-set-max-tokens)
-                  (cons (ellm--system-message-description) 'ellm-set-system-message))))
+                  (cons (ellm--system-message-description) #'ellm-set-system-message))))
     (alist-get
      (completing-read "Choose a setting to configure: " (mapcar 'car choices))
      choices nil nil 'equal)))
@@ -635,7 +635,7 @@ When togling off, restore the previously set values."
     (lua-mode . "lua")
     (c-or-c++-mode . "cpp")
     (c-or-c++-ts-mode . "cpp")
-    (rjsx-mode . "js")
+    (rjsx-mode . "typescript")
     (sh-mode . "shell"))
   "Alist mapping major modes to Org mode source block languages.")
 
@@ -755,9 +755,11 @@ Return the conversation-data alist."
   (let* ((system-message-args
           (when (derived-mode-p 'prog-mode)
             (list :language
-                  (thread-last (symbol-name major-mode)
-                               (string-remove-suffix "-mode")
-                               (string-remove-suffix "-ts")))))
+                  (or (alist-get major-mode ellm--major-mode-to-org-lang-alist)
+                      (thread-last (symbol-name major-mode)
+                                   (string-remove-suffix "-mode")
+                                   (string-remove-suffix "-ts"))
+                      "computer"))))
          (conversation
           (list
            (cons 'messages (list))
@@ -1572,19 +1574,24 @@ Note that `FILENAME' should be an absolute path to the file."
   "Start the ellm Node.js server."
   (interactive)
   (unless (ellm--server-running-p)
-    (ellm-set-provider 'openai)
     (let ((default-directory (file-name-directory (locate-library "ellm")))
-          (openai-api-key (ellm-get-api-key-from-env)))
-      (unless openai-api-key
-        (setenv "OPENAI_API_KEY" (funcall ellm-get-api-key)))
-      (setq ellm--server-process
-            (start-process "ellm-server" ellm--server-buffer-name
-                           "node" "--trace-deprecation"
-                           (expand-file-name "server.js")
-                           "--host" ellm-server-host
-                           "--port" (number-to-string ellm-server-port)))))
-  ;; (set-process-query-on-exit-flag ellm--server-process nil)
-  (message "ellm Node.js server started."))
+          (prev-provider ellm-provider))
+      (ellm-set-provider 'openai)
+      (let ((openai-api-key (ellm-get-api-key-from-env)))
+        (unless openai-api-key
+          (setenv "OPENAI_API_KEY" (funcall ellm-get-api-key))))
+      (ellm-set-provider 'anthropic)
+      (let ((anthropic-api-key (ellm-get-api-key-from-env)))
+        (unless anthropic-api-key
+          (setenv "ANTHROPIC_API_KEY" (funcall ellm-get-api-key))))
+      (ellm-set-provider prev-provider))
+    (setq ellm--server-process
+          (start-process "ellm-server" ellm--server-buffer-name
+                         "node" "--trace-deprecation"
+                         (expand-file-name "server.js")
+                         "--host" ellm-server-host
+                         "--port" (number-to-string ellm-server-port)))
+    (message "ellm webserver started")))
 
 (defun ellm-stop-server ()
   "Stop the ellm Node.js server."
@@ -1592,7 +1599,7 @@ Note that `FILENAME' should be an absolute path to the file."
   (when (ellm--server-running-p)
     (kill-process ellm--server-process)
     (setq ellm--server-process nil)
-    (message "ellm Node.js server stopped.")))
+    (message "ellm webserver stopped")))
 
 (defun ellm-text-to-speech (&optional text)
   "Convert `TEXT' to speech, or the content of the active region if `TEXT' is nil."
@@ -1707,10 +1714,13 @@ attribute."
     (s-trim-right
      (let* ((buffer (overlay-buffer (overlay-get overlay 'ellm-other-overlay)))
             (language (with-current-buffer buffer
-                        (thread-last
-		          (symbol-name major-mode)
-		          (string-remove-suffix "-mode")
-		          (string-remove-suffix "-ts"))))
+                        (or (alist-get major-mode ellm--major-mode-to-org-lang-alist)
+                            (and (derived-mode-p 'prog-mode)
+                                 (thread-last
+                                   (symbol-name major-mode)
+                                   (string-remove-suffix "-mode")
+                                   (string-remove-suffix "-ts")))
+                            "text")))
 	    (start (overlay-start overlay))
 	    (end (overlay-end overlay))
 	    (content (buffer-substring-no-properties start end)))
