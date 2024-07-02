@@ -442,39 +442,38 @@ system message function, if there are any."
 
 (defun ellm--validation-max-tokens (max-tokens)
   "Validate the `MAX-TOKENS' value."
-  (and (integerp max-tokens) (>= max-tokens 1) (<= max-tokens 4096)))
+  (when (and (integerp max-tokens) (> max-tokens 0) (<= max-tokens 4096))
+    max-tokens))
 
 (defun ellm-set-max-tokens (&optional max-tokens)
   "Set the `MAX-TOKENS' to use for the LLM prompt."
   (interactive)
-  (if (called-interactively-p 'interactive)
-    (let (mt)
-      (while (not (and (setq mt (read-number "Max tokens (between 1 and 4096): "))
-                       (ellm--validation-max-tokens mt)))
-        (message "Error: Invalid max-tokens value: %s" mt))
-      (and (setq ellm-max-tokens mt)
-           (message "...max-tokens set to %d..." ellm-max-tokens)))
-    (if (ellm--validation-max-tokens max-tokens)
-        (setq ellm-max-tokens max-tokens)
-      (error "Invalid argument: `%s' should be integer between 1 and 4096" max-tokens))))
+  (let ((mt max-tokens))
+    (if (called-interactively-p 'interactive)
+        (while (null (setq mt (ellm--validation-max-tokens max-tokens)))
+          (setq max-tokens (read-number "Max tokens (between 1 and 4096): ")))
+      (unless (setq mt (ellm--validation-max-tokens max-tokens))
+        (error "Invalid argument: `%s' should be integer between 1 and 4096" max-tokens)))
+  (setq ellm-max-tokens mt)
+  (message "...max-tokens set to %s..." ellm-max-tokens)))
+
 
 (defun ellm--validation-temperature (temperature)
   "Validate the `TEMPERATURE' value."
-  (and (numberp temperature) (>= temperature 0.0) (<= temperature 2.0)))
+  (when (and (numberp temperature) (>= temperature 0.0) (<= temperature 2.0))
+    temperature))
 
 (defun ellm-set-temperature (&optional temperature)
   "Set the `TEMPERATURE' to use for the LLM prompt."
   (interactive)
-  (if (called-interactively-p 'any)
-   (let (temp)
-     (while (not (and (setq temp (read-number "Temperature (between 0.0 and 2.0): "))
-                      (ellm--validation-temperature temp)))
-       (message "Error: Invalid temperature value: %s" temp))
-     (and (setq ellm-temperature temp)
-           (message "...temperature set to %s..." ellm-temperature)))
-   (if (ellm--validation-temperature temperature)
-       (setq ellm-temperature temperature)
-     (error "Invalid argument: `%s' should be number between 0 and 2" temperature))))
+  (let ((temp temperature))
+    (if (called-interactively-p 'interactive)
+        (while (null (setq temp (ellm--validation-temperature temperature)))
+          (setq temperature (read-number "Temperature (between 0.0 and 2.0): ")))
+      (unless (setq temp (ellm--validation-temperature temperature))
+        (error "Invalid argument: `%s' should be number between 0.0 and 2.0" temperature)))
+    (setq ellm-temperature temp)
+    (message "...temperature set to %s..." ellm-temperature)))
 
 (defun ellm-set-config ()
   "Call the `SETTING-FUNCTION' according to the user's choice."
@@ -488,20 +487,17 @@ system message function, if there are any."
 (defun ellm--config-prompt ()
   "Prompt the user to choose a setting to configure."
   (let ((choices (list
-                  (cons (ellm--toggle-test-mode-description) 'ellm-toggle-test-mode)
+                  (cons (ellm--toggle-test-mode-description) #'ellm-toggle-test-mode)
                   (cons (ellm--toggle-save-conversations-description) 'ellm-toggle-save-conversations)
                   (cons (ellm--toggle-debug-mode-description) 'ellm-toggle-debug-mode)
                   (cons (ellm--provider-description) 'ellm-set-provider)
                   (cons (ellm--model-size-description) 'ellm-set-model-size)
                   (cons (ellm--temperature-description) 'ellm-set-temperature)
-                  (cons (ellm--max-tokens-description) 'ellm-set-max-tokens)
-                  (cons (ellm--system-message-description) 'ellm-set-system-message)))
-        (minibuffer-local-map (copy-keymap minibuffer-local-map)))
-    (define-key minibuffer-local-map (kbd "q") 'abort-recursive-edit)
-    (let ((minibuffer-allow-text-properties t))
-      (alist-get
-       (completing-read "Choose a setting to configure: " (mapcar 'car choices))
-       choices nil nil 'equal))))
+                  (cons (ellm--max-tokens-description) #'ellm-set-max-tokens)
+                  (cons (ellm--system-message-description) 'ellm-set-system-message))))
+    (alist-get
+     (completing-read "Choose a setting to configure: " (mapcar 'car choices))
+     choices nil nil 'equal)))
 
 (defun ellm--system-message-description ()
   "Return a string describing the current system message."
