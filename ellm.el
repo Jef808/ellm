@@ -146,18 +146,18 @@ symbol, and return the path as a string"
   :group 'ellm)
 
 (defvar ellm--models-alist
-  `((openai . `((big . ,"gpt-4o")
-                (medium . ,"gpt-3.5-turbo")
-                (small . ,"gpt-3.5-turbo")))
-    (anthropic . `((big . ,"claude-3-5-sonnet-20240620")
-                   (medium . ,"claude-3-5-sonnet-20240620")
-                   (small . ,"claude-3-haiku-20240307")))
-    (groq . `((big . ,"llama3-70b-8192")
-              (medium . ,"llama3-8b-8292")
-              (small . ,"mixtral-8x7b-32768")))
-    (mistral . `((big . ,"codestral-latest")
-                 (medium . ,"mistral-large-latest")
-                 (small . ,"mistral-small-latest"))))
+  `((openai . `((big . "gpt-4o")
+                (medium . "gpt-3.5-turbo")
+                (small . "gpt-3.5-turbo")))
+    (anthropic . `((big . "claude-3-5-sonnet-20240620")
+                   (medium . "claude-3-5-sonnet-20240620")
+                   (small . "claude-3-haiku-20240307")))
+    (groq . `((big . "llama3-70b-8192")
+              (medium . "llama3-8b-8292")
+              (small . "mixtral-8x7b-32768")))
+    (mistral . `((big . "codestral-latest")
+                 (medium . "mistral-large-latest")
+                 (small . "mistral-small-latest"))))
   "Alist mapping providers to their models.")
 
 (defcustom ellm-model-alist `(("gpt-4o" . (:provider openai :size big))
@@ -206,12 +206,9 @@ symbol, and return the path as a string"
 which describes the discussion.
 You separate the title and the response by a markdown horizontal \
 rule (i.e. a line consisting of three or more dashes).
-Your answers are thus formatted as follows:
-
-Your title here
-
---------------------------------------------
-
+Your answers are thus formatted as follows:\n
+Your title here\n
+--------------------------------------------\n
 Your response here.
 Format your response in markdown."
   "The system message suffix to append to the system message.")
@@ -228,7 +225,6 @@ If needed, request further information or clarifications from the user.
 Avoid unnecessary politeness and organizational sections.
 Instead, focus on providing clear, relevant examples and the technical aspects \
 of the subject at hand.")
-
     (question-and-answer :type string
                          :value "You are an expert technical assistant integrated with Emacs.
 Your primary task is to precisely and accurately answer the user's technical questions.
@@ -236,7 +232,6 @@ When answering, ensure that your responses are directly relevant to the question
 If you are unsure or don't have enough information to provide a confident answer, \
 simply say \"I don't know\" or \"I'm not sure.\"
 Avoid unnecessary politeness details and focus on accuracy and relevance.")
-
     (code-refactoring :type function
                       :args (:language)
                       :value (lambda (language)
@@ -247,7 +242,6 @@ Ensure that the refactored code remains functionally equivalent to the original.
 If there are multiple valid ways to refactor, present the options and recommend the most efficient one.
 Provide clear, concise code samples highlighting the changes."
                                        language)))
-
     (code-review :type function
                  :args (:language)
                  :value (lambda (language)
@@ -259,7 +253,6 @@ Ensure your comments are clear, specific, and actionable.
 Feel free to request additional context or clarifications if necessary.
 Avoid unnecessary politeness and organizational sections like a closing summary."
                                   language)))
-
     (code-generation :type function
                      :args (:language)
                      :value (lambda (language)
