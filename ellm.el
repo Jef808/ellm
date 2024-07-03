@@ -176,7 +176,7 @@ symbol, and return the path as a string"
   :group 'ellm)
 
 (defun ellm-providers-supported ()
-    "List of supported providers."
+  "List of supported providers."
   (seq-uniq (mapcar
              (lambda (model)
                (plist-get (cdr model) :provider)) ellm-model-alist)))
@@ -478,11 +478,8 @@ system message function, if there are any."
 (defun ellm-set-config ()
   "Call the `SETTING-FUNCTION' according to the user's choice."
   (interactive)
-  (let ((minibuffer-local-map (copy-keymap minibuffer-local-map)))
-    (define-key minibuffer-local-map (kbd "q") 'keyboard-quit)
-    (let ((minibuffer-allow-text-properties t)
-          (minibuffer-local-map minibuffer-local-map))
-      (while (funcall-interactively (ellm--config-prompt))))))
+  (while-let ((config-function (ellm--config-prompt)))
+    (funcall-interactively config-function)))
 
 (defun ellm--config-prompt ()
   "Prompt the user to choose a setting to configure."
@@ -848,8 +845,10 @@ Also remove the TITLE and ID entries."
 (defun ellm-conversations-buffer-from-project ()
   "Get the conversations buffer associated to the current project.
 The project is determined by calling `project-current' (which see).
-In case the function was called interactively, `project-current' is called
-with a non-nil MAYBE-PROMPT argument."
+In case the function was called interactively, `project-current' is
+called with a non-nil MAYBE-PROMPT argument.
+If `FORCE-PROMPT' is non-nil, instead prompt the user for which
+project to target."
   (interactive)
   (let* ((maybe-prompt (called-interactively-p 'interactive))
          (filename-suffix
@@ -857,58 +856,22 @@ with a non-nil MAYBE-PROMPT argument."
               (project-name current)
             "general"))
          (filepath (f-join ellm--conversations-dir
-            (concat ellm--conversations-filename-prefix
-                    filename-suffix
-                    ".org"))))
+                           (concat ellm--conversations-filename-prefix
+                                   filename-suffix
+                                   ".org"))))
     (find-file-noselect filepath)))
 
 (defun ellm-chat (&optional current-conversation conversations-buffer prompt-wrapper user-prompt)
-  "Send a request to the current provider's chat completion endpoint.
-This function serves as the main entry point for interacting with the `ellm'
-package, which facilitates chat-based communication with a specified model
-provider.
-Arguments:
-- `CURRENT-CONVERSATION' (optional): A conversation object representing the
-ongoing
- conversation. If provided, the conversation will be continued with the next
-prompt
- and the associated response. If nil, a new conversation will be initialized.
-- `CONVERSATIONS-BUFFER' (optional): A string representing the file path where
-the conversation should be saved. If nil, the conversation will be saved to a
-default location determined by the `ellm-conversations-buffer-from-project'
-function.
-- `PROMPT-WRAPPER'
-- `USER-PROMPT' (optional): A string representing the prompt to be sent to
-the model provider. If nil, the prompt will be read interactively from the
-minibuffer.
-Behavior:
-1. The function determines the prompt message based on whether
-`CURRENT-CONVERSATION' is provided.
-2. It reads the prompt either from `USER-PROMPT' or interactively from the
-minibuffer.
-3. It determines the file path for saving the conversation using
-`CONVERSATIONS-BUFFER' or a default method.
-4. It updates the conversation object by adding the user's message if
-`CURRENT-CONVERSATION' is provided,
-   or initializes a new conversation if not.
-5. It constructs the URL for the request using the conversation provider.
-6. It prepares the request headers and body based on the conversation provider.
-7. It sets the HTTP method to POST and configures the request with the
-prepared headers and body.
-8. It logs the request details for debugging purposes.
-9. It sends the request to the model provider's endpoint and specifies
-`ellm--handle-response' as the callback
-   function to handle the response.
-10. It displays a message indicating that it is waiting for a response from the
-model provider.
-Returns:
-- Always returns nil.
-Example usage:
-  (ellm-chat)
-  (ellm-chat my-conversation)
-  (ellm-chat nil nil \"What is the weather today?\")
-  (ellm-chat my-conversation
-  (buffer-get \"conversations-general.org\") \"Tell me a joke.\")"
+  "Send a chat request to the current provider's completion endpoint.
+This function is the main entry point for interacting with the `ellm' package.
+Optional arguments:
+- CURRENT-CONVERSATION: Conversation object to continue. Start a new one if nil.
+- CONVERSATIONS-BUFFER: File path to save the conversation. If nil, use default.
+- PROMPT-WRAPPER: Function to wrap the prompt.
+- USER-PROMPT: Prompt string. If nil, read interactively.
+The function sends the request, handles the response, and updates the
+conversation.
+This function always returns nil."
   (interactive)
   (let* ((prompt-message (if current-conversation
                              "Enter your next prompt: "
@@ -1062,7 +1025,6 @@ This function is meant to be used with the response from the OpenAI API."
 
 (defun ellm--add-or-update-title (title conversation)
   "Add or update the `TITLE' in the `CONVERSATION'.
-
 A generic `Untitled  [TIMESTAMP]' title is used if `TITLE' is nil."
   (let* ((previous-title (alist-get 'title conversation))
          (new-title (or title previous-title)))
@@ -1071,7 +1033,6 @@ A generic `Untitled  [TIMESTAMP]' title is used if `TITLE' is nil."
 
 (defun ellm--split-response (response-content)
   "Split the `RESPONSE-CONTENT' around a markdown horizontal rule.
-
 When response comes in the form of
 \"TITLE
 ---
@@ -1097,7 +1058,6 @@ Note that both components are trimmed of whitespace."
 
 (defun ellm--messages-to-string (messages &optional headline-char)
   "Convert the MESSAGES to a markdown string.
-
 Use `HEADLINE-CHAR' as the character for headlines."
   (mapconcat (lambda (message) (ellm--stringify-message message headline-char)) messages "\n\n"))
 
@@ -1320,19 +1280,34 @@ is temporarily highlighted to indicate they are new messages."
               (pulse-momentary-highlight-region last-assistant-message-begin (point)))))
       (message "Last user message not found"))))
 
-(defun ellm-show-conversations-buffer (&optional buffer)
-  "Show the conversations `BUFFER'.
-Which file that is is determined by `ellm-conversations-buffer-from-project',
-unless `BUFFER' is non-nil in which case that buffer is used."
+(defun ellm-show-conversations-buffer ()
+  "Show the relevant conversations file.
+Which file that is is determined by the current project
+via `ellm-conversations-buffer-from-project' (which see)."
   (interactive)
-  (unless buffer
-    (if ellm-save-conversations
-        (let ((fun-call
-               (if (called-interactively-p 'interactive)
-                   #'call-interactively #'funcall)))
-          (setq buffer (funcall fun-call #'ellm-conversations-buffer-from-project)))
-      (setq buffer (get-buffer-create ellm--temp-conversations-buffer-name))))
-  (ellm--display-conversations-buffer buffer))
+  (let* ((fun-call
+          (if (called-interactively-p 'interactive)
+              #'call-interactively
+            #'funcall))
+         (buffer
+          (if ellm-save-conversations
+              (funcall fun-call #'ellm-conversations-buffer-from-project)
+            (get-buffer-create ellm--temp-conversations-buffer-name))))
+    (ellm--display-conversations-buffer buffer)))
+
+(defun ellm-find-conversations-file-other-window ()
+  "Open a conversation file in another window.
+The file is selected from the directory specified by `ellm--conversations-dir'
+and the file prefix specified by `ellm--conversations-filename-prefix'."
+  (interactive)
+  (let* ((default-directory (expand-file-name ellm--conversations-dir))
+         (conversation-files
+          (directory-files
+            default-directory t
+            (concat "^" (regexp-quote ellm--conversations-filename-prefix) ".*\\.org$")))
+         (chosen-file (completing-read "Choose conversation file: " conversation-files)))
+    (when chosen-file
+      (find-file-other-window chosen-file))))
 
 (defun ellm-export-conversation ()
   "Mark the current conversation in the `ellm--conversations-file'."
@@ -1636,6 +1611,7 @@ Note that `FILENAME' should be an absolute path to the file."
     (t                   (:background "#CD73FBEECD73" :extend t))) ; Very pale green
   "Face for context overlays in the ellm context buffer."
   :group 'ellm)
+
 (defvar ellm-context-buffer-face 'ellm-context-buffer-face)
 
 (defface ellm-context-face
@@ -1643,6 +1619,7 @@ Note that `FILENAME' should be an absolute path to the file."
     (t                   (:background "#EEECEC0FCE7E" :extend t))) ; Very pale goldenrod
   "Face for context overlays in their original buffer."
   :group 'ellm)
+
 (defvar ellm-context-face 'ellm-context-face)
 
 (defvar ellm-context-overlays nil
@@ -1721,11 +1698,11 @@ attribute."
                                    (string-remove-suffix "-mode")
                                    (string-remove-suffix "-ts")))
                             "text")))
-	    (start (overlay-start overlay))
-	    (end (overlay-end overlay))
-	    (content (buffer-substring-no-properties start end)))
+            (start (overlay-start overlay))
+            (end (overlay-end overlay))
+            (content (buffer-substring-no-properties start end)))
        (if language
-	   (format "```%s\n%s\n```\n\n" language content)
+           (format "```%s\n%s\n```\n\n" language content)
          (format "```\n%s\n```\n\n" content))))))
 
 (defun ellm--insert-context-content (overlay)
