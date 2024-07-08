@@ -1064,6 +1064,10 @@ is `HEADLINE-CHAR' or \"#\" by default."
          (hc (or headline-char "#")))
     (format "%s %s\n\n%s" hc role content)))
 
+(defconst ellm--lua-filter-path
+  (expand-file-name "format_lua.lua" (locate-library "ellm"))
+  "Path to the Lua filter used to format the org output from Pandoc.")
+
 (defun ellm--markdown-to-org-sync (markdown-string)
   "Convert `MARKDOWN-STRING' from Markdown to Org using Pandoc."
   (let* ((pandoc-command
@@ -1071,7 +1075,8 @@ is `HEADLINE-CHAR' or \"#\" by default."
                   " -f markdown+tex_math_single_backslash"
                   " -t org"
                   " --shift-heading-level-by=1"
-                  " --lua-filter=/home/jfa/projects/emacs/ellm/format_org.lua"))
+                  " --lua-filter="
+                  ellm--lua-filter-path))
          (org-string
           (with-temp-buffer
             (insert markdown-string)
@@ -1644,7 +1649,7 @@ Note that `FILENAME' should be an absolute path to the file."
   (unless (and (ellm--overlay-context-overlay-p overlay)
                (buffer-live-p (overlay-buffer overlay)))
     (error "Not a valid context chunk overlay: %S" overlay))
-  (if (buffer-match-p ellm--context-buffer-name (overlay-buffer overlay))
+  (if (buffer-match-p (ellm--get-or-create-context-buffer) (overlay-buffer overlay))
       overlay (overlay-get overlay 'ellm-other-overlay)))
 
 (defun ellm--overlay-context-overlay-p (overlay)
@@ -1725,7 +1730,7 @@ If the overlay is not in the context buffer, is empty, deleted or
 is not found, do nothing."
   (when (and overlay
              (not (ellm--overlay-empty-p overlay))
-             (buffer-match-p ellm--context-buffer-name (overlay-buffer overlay))
+             (buffer-match-p (ellm--get-or-create-context-buffer) (overlay-buffer overlay))
     (with-current-buffer (overlay-buffer overlay)
       (let ((inhibit-read-only t)
             (start (overlay-start overlay))
@@ -1826,16 +1831,16 @@ is not found, do nothing."
     (define-key map (kbd "C-c ; x") #'ellm-view-context-buffer)
     (define-key map (kbd "C-c ; C-M-k") #'ellm-clear-context)
     map)
-  :global nil
-  (unless ellm-mode
-    (dolist (buffer '(ellm--context-buffer-name
-                      ellm--log-buffer-name
-                      ellm--temp-conversations-buffer-name))
-      (ignore-errors (kill-buffer buffer)))))
+  :global nil)
 
 ;;;###autoload
 (define-globalized-minor-mode global-ellm-mode ellm-mode
   (lambda ()
+    (unless global-ellm-mode
+      (dolist (buffer (list ellm--context-buffer-name
+                            ellm--log-buffer-name
+                            ellm--temp-conversations-buffer-name))
+        (ignore-errors (kill-buffer buffer))))
     (ellm-mode))
   :global t
   :group 'ellm)
