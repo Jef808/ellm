@@ -1065,7 +1065,7 @@ is `HEADLINE-CHAR' or \"#\" by default."
     (format "%s %s\n\n%s" hc role content)))
 
 (defconst ellm--lua-filter-path
-  (expand-file-name "format_lua.lua" (locate-library "ellm"))
+  (expand-file-name "format_lua.lua" (file-name-directory (locate-library "ellm")))
   "Path to the Lua filter used to format the org output from Pandoc.")
 
 (defun ellm--markdown-to-org-sync (markdown-string)
