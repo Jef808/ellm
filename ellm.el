@@ -1836,7 +1836,10 @@ is not found, do nothing."
 ;;;###autoload
 (define-globalized-minor-mode global-ellm-mode ellm-mode
   (lambda ()
-    (unless global-ellm-mode
+    (if global-ellm-mode
+        (and
+          (ellm--setup-persistance)
+          (ellm--context-buffer-setup))
       (dolist (buffer (list ellm--context-buffer-name
                             ellm--log-buffer-name
                             ellm--temp-conversations-buffer-name))
