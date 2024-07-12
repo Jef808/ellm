@@ -215,7 +215,7 @@ Format your response in markdown."
 
 (defcustom ellm-system-messages
   `((default :type string
-             :value "You are a useful general assistant integrated with Emacs.
+     :value "You are a useful general assistant integrated with Emacs.
 Your goal is to execute the user's task or precisely answer their questions, \
 using all the CONTEXT the user provides (if any).
 Ensure your responses are relevant and adequate based on the nature of the query.
@@ -340,7 +340,7 @@ See `ellm--add-context-from-region' for usage details.")
                    `(defun ,(intern (format "ellm--get-%s-api-key-from-password-store" provider)) ()
                       ,(format "Get the %s API key from the password store." provider)
                       (password-store-get ,(plist-get key-info :password-store-path)))))
-                 api-keys)))
+               api-keys)))
 
 (defun ellm-get-api-key-from-password-store ()
   "Get the API key from the password store.
@@ -349,7 +349,7 @@ the `ellm--get-<PROVIDER>-api-key-from-password-store' for PROVIDER given by
 the valueof `ellm-provider'."
   (funcall (intern (format "ellm--get-%s-api-key-from-password-store" ellm-provider))))
 
-; TODO Use this to configure the providers
+                                        ; TODO Use this to configure the providers
 (defmacro ellm-define-provider (name &rest config)
   "Define a new provider with given `NAME' and `CONFIG'.
 The `CONFIG' should be a plist with the following keys:
@@ -361,8 +361,8 @@ The `CONFIG' should be a plist with the following keys:
   `(defcustom ,(intern (format "ellm-%s-config" name))
      ',config
      ,(format "Configuration for %s API." name)
-  :type '(plist :key-type symbol :value-type sexp)
-  :group 'ellm))
+     :type '(plist :key-type symbol :value-type sexp)
+     :group 'ellm))
 
 (defun ellm-get-provider-config (provider)
   "Get the configuration for the `PROVIDER'."
@@ -372,7 +372,7 @@ The `CONFIG' should be a plist with the following keys:
   "Get the system messages."
   (let ((system-messages (copy-alist ellm-system-messages)))
     (if (boundp 'ellm-project-system-messages)
-      (append ellm-project-system-messages system-messages)
+        (append ellm-project-system-messages system-messages)
       system-messages)))
 
 (defun ellm--get-system-message (&rest args)
@@ -457,8 +457,8 @@ system message function, if there are any."
           (setq max-tokens (read-number "Max tokens (between 1 and 4096): ")))
       (unless (setq mt (ellm--validation-max-tokens max-tokens))
         (error "Invalid argument: `%s' should be integer between 1 and 4096" max-tokens)))
-  (setq ellm-max-tokens mt)
-  (message "...max-tokens set to %s..." ellm-max-tokens)))
+    (setq ellm-max-tokens mt)
+    (message "...max-tokens set to %s..." ellm-max-tokens)))
 
 
 (defun ellm--validation-temperature (temperature)
@@ -534,17 +534,17 @@ system message function, if there are any."
 When togling off, restore the previously set values."
   (interactive)
   (if ellm--test-mode
-    (progn
-      (ellm-set-max-tokens (get 'ellm-max-tokens 'previous-value))
-      (ellm-set-model-size (get 'ellm-model-size 'previous-value))
-      (setq ellm-save-conversations (get 'ellm-save-conversations 'previous-value))
-      (put 'ellm-max-tokens 'previous-value nil)
-      (put 'ellm-model-size 'previous-value nil)
-      (setq ellm--test-mode nil)
-      (when-let ((temp-buffer (get-buffer ellm--temp-conversations-buffer-name))
-                 (inhibit-read-only t))
-        (kill-buffer temp-buffer))
-      (message "...ellm-test-mode disabled..."))
+      (progn
+        (ellm-set-max-tokens (get 'ellm-max-tokens 'previous-value))
+        (ellm-set-model-size (get 'ellm-model-size 'previous-value))
+        (setq ellm-save-conversations (get 'ellm-save-conversations 'previous-value))
+        (put 'ellm-max-tokens 'previous-value nil)
+        (put 'ellm-model-size 'previous-value nil)
+        (setq ellm--test-mode nil)
+        (when-let ((temp-buffer (get-buffer ellm--temp-conversations-buffer-name))
+                   (inhibit-read-only t))
+          (kill-buffer temp-buffer))
+        (message "...ellm-test-mode disabled..."))
     (progn
       (put 'ellm-max-tokens 'previous-value (symbol-value 'ellm-max-tokens))
       (put 'ellm-model-size 'previous-value (symbol-value 'ellm-model-size))
@@ -563,7 +563,7 @@ When togling off, restore the previously set values."
                   (value (cadr plist)))
               (insert (format "#+%s: %s\n" prop value)))
             (setq plist (cddr plist))))
-      (message "...ellm-test-mode enabled...")))))
+        (message "...ellm-test-mode enabled...")))))
 
 (defun ellm-toggle-debug-mode ()
   "Toggle debug mode."
@@ -768,8 +768,8 @@ Return the conversation-data alist."
            (cons 'model ellm-model)
            (cons 'title nil)
            (cons 'system (apply #'ellm--get-system-message system-message-args)))))
-         (ellm--add-user-message conversation prompt)
-         conversation))
+    (ellm--add-user-message conversation prompt)
+    conversation))
 
 (defun ellm--prepare-request-headers (conversation)
   "Prepare the API call body to send `CONVERSATION'."
@@ -897,13 +897,13 @@ This function always returns nil."
          (url-request-method "POST")
          (url-request-extra-headers request-headers)
          (url-request-data request-body))
-      (ellm--log `((url . ,url)
-                   (headers . ,request-headers)
-                   (body . ,request-body)) "REQUEST")
-      (url-retrieve url #'ellm--handle-response (list buffer conversation))
-      (message "...Waiting for response from %s..."
-               (symbol-name (ellm--get-model-provider conversation)))
-  nil))
+    (ellm--log `((url . ,url)
+                 (headers . ,request-headers)
+                 (body . ,request-body)) "REQUEST")
+    (url-retrieve url #'ellm--handle-response (list buffer conversation))
+    (message "...Waiting for response from %s..."
+             (symbol-name (ellm--get-model-provider conversation)))
+    nil))
 
 (defun ellm--handle-response (status conversations-buffer conversation)
   "Handle the response to the prompt made using `CONVERSATION'.
@@ -1032,7 +1032,7 @@ A generic `Untitled  [TIMESTAMP]' title is used if `TITLE' is nil."
   (let* ((previous-title (alist-get 'title conversation))
          (new-title (or title previous-title)))
     (setf (alist-get 'title conversation)
-        (or new-title "Untitled"))))
+          (or new-title "Untitled"))))
 
 (defun ellm--split-response (response-content)
   "Split the `RESPONSE-CONTENT' around a markdown horizontal rule.
@@ -1095,7 +1095,7 @@ is `HEADLINE-CHAR' or \"#\" by default."
                                      (current-buffer) 'no-mark
                                      ellm--log-buffer-name)
             (buffer-substring-no-properties (point-min) (point-max)))))
-         org-string))
+    org-string))
 
 (defun ellm--resume-conversation (&optional id prompt)
   "Resume a previous conversation with given `ID'.
@@ -1133,11 +1133,11 @@ The returned object is an org parse tree."
          (effective-title (when (string-match org-element--timestamp-regexp title)
                             (s-trim (substring title 0 (match-beginning 0)))))
          (messages (ellm-org--get-conversation-messages posn)))
-      (setq conversation metadata)
-      (push (cons 'title effective-title) conversation)
-      (push (cons 'messages messages) conversation)
-      (push (cons 'system (ellm--get-system-message)) conversation)
-      conversation))
+    (setq conversation metadata)
+    (push (cons 'title effective-title) conversation)
+    (push (cons 'messages messages) conversation)
+    (push (cons 'system (ellm--get-system-message)) conversation)
+    conversation))
 
 (defun ellm-org--get-conversation-metadata (properties)
   "Extract metadata from the org `PROPERTIES' alist."
@@ -1247,14 +1247,14 @@ The context of the next (or first) user message is passed
 as the `SELECTION' argument. Optionally, the `ID' of a previous
 conversation can be specified to continue that conversation."
   (setq ellm-auto-export t)
-    (when selection
-      (with-temp-buffer
-        (goto-char (point-min))
-        (set-mark (point))
-        (insert selection)
-        (if id
-            (ellm--resume-conversation id)
-          (ellm-chat)))))
+  (when selection
+    (with-temp-buffer
+      (goto-char (point-min))
+      (set-mark (point))
+      (insert selection)
+      (if id
+          (ellm--resume-conversation id)
+        (ellm-chat)))))
 
 (defun ellm--display-conversations-buffer (buffer &optional highlight-last-message)
   "Display the conversations in `BUFFER'.
@@ -1311,8 +1311,8 @@ and the file prefix specified by `ellm--conversations-filename-prefix'."
   (let* ((default-directory (expand-file-name ellm--conversations-dir))
          (conversation-files
           (directory-files
-            default-directory t
-            (concat "^" (regexp-quote ellm--conversations-filename-prefix) ".*\\.org$")))
+           default-directory t
+           (concat "^" (regexp-quote ellm--conversations-filename-prefix) ".*\\.org$")))
          (chosen-file (completing-read "Choose conversation file: " conversation-files)))
     (when chosen-file
       (find-file-other-window chosen-file))))
@@ -1326,7 +1326,7 @@ and the file prefix specified by `ellm--conversations-filename-prefix'."
       (browse-url html-file))))
 
 (defun ellm--goto-conversation-top ()
-    "Go to the top of the current conversation in the current buffer.
+  "Go to the top of the current conversation in the current buffer.
 This function navigates to the top-level headline (level 1) of the
 current conversation. It first checks if the point is within a
 conversation, and if not, it throws an error. It then uses
@@ -1347,8 +1347,8 @@ conversation, or throws an error otherwise."
                             1 (org-element-property :begin hl)))
                          ancestors
                          :from-end)))
-        (goto-char (org-element-property :begin top-headline))
-      (error "No top-level headline found")))
+      (goto-char (org-element-property :begin top-headline))
+    (error "No top-level headline found")))
 
 (defun ellm--goto-first-top-level-heading ()
   "Move the point to the first top-level heading in the current buffer.
@@ -1424,7 +1424,7 @@ This function does not take any arguments and returns nil."
         (when (numberp rating)
           (setq rating (number-to-string rating)))
         (unless (member rating (mapcar 'car ellm-org--faces-alist))
-      (error "Invalid rating. Please enter a value between 1 and 5")))
+          (error "Invalid rating. Please enter a value between 1 and 5")))
     (setq rating (completing-read "Rate the conversation (1-5): " '(1 2 3 4 5))))
   (save-excursion
     (ellm--goto-conversation-top)
@@ -1478,7 +1478,7 @@ When at the top of the conversation, fold the subtree."
          (doc (funcall documentation-fn (symbol-at-point))))
     (cons symbol doc)))
 
-; TODO Make this more portable by using different search tools as available.
+                                        ; TODO Make this more portable by using different search tools as available.
 (defun ellm-search-in-conversations (&optional pattern)
   "Search for headlines matching `PATTERN' in the conversations files."
   (interactive)
@@ -1506,7 +1506,7 @@ When at the top of the conversation, fold the subtree."
                 (push (cons s (or (documentation-property s 'variable-documentation) "not documented")) var-list))))))
     (mapatoms (lambda (sym)
                 (when (string-match pattern (symbol-name sym))
-                    (funcall doc-func sym))))
+                  (funcall doc-func sym))))
     `((variables . ,(nreverse var-list)) (functions . ,(nreverse fun-list)))))
 
 (defun ellm--extract-definitions-in-buffer ()
@@ -1593,7 +1593,7 @@ Note that `FILENAME' should be an absolute path to the file."
            (filepath (concat "~/.ellm/speech/" timestamp ".wav"))
            (url (concat ellm-server-host ":" (number-to-string ellm-server-port) "/tts"))
            (data `(("input" . ,text)
-                  ("filepath" . ,filepath))))
+                   ("filepath" . ,filepath))))
       (request
         url
         :type "POST"
@@ -1654,21 +1654,21 @@ Note that `FILENAME' should be an absolute path to the file."
       (= (overlay-start overlay) (overlay-end overlay))))
 
 (defun ellm-add-context-chunk ()
-   "Create an overlay for the current region and add it to `ellm-context-overlays'."
-   (interactive)
-   (if (use-region-p)
-       (let* ((start (region-beginning))
-              (end (region-end))
-              (overlay (make-overlay start end)))
-         (seq-do #'ellm-remove-context-chunk (ellm--contexts-in-region start end))
-         (ellm--insert-context-content overlay)
-         (overlay-put overlay 'ellm-context t)
-         (overlay-put overlay 'face ellm-context-face)
-         (overlay-put overlay 'evaporate t)
-         (push overlay ellm-context-overlays)
-         (deactivate-mark)
-         (message "Context added"))
-     (message "No region selected")))
+  "Create an overlay for the current region and add it to `ellm-context-overlays'."
+  (interactive)
+  (if (use-region-p)
+      (let* ((start (region-beginning))
+             (end (region-end))
+             (overlay (make-overlay start end)))
+        (seq-do #'ellm-remove-context-chunk (ellm--contexts-in-region start end))
+        (ellm--insert-context-content overlay)
+        (overlay-put overlay 'ellm-context t)
+        (overlay-put overlay 'face ellm-context-face)
+        (overlay-put overlay 'evaporate t)
+        (push overlay ellm-context-overlays)
+        (deactivate-mark)
+        (message "Context added"))
+    (message "No region selected")))
 
 (defun ellm--prepare-context-chunk (overlay)
   "Prepare the context chunk of `OVERLAY' for making a prompt.
@@ -1695,26 +1695,26 @@ attribute."
          (format "```\n%s\n```\n\n" content))))))
 
 (defun ellm--insert-context-content (overlay)
-   "Insert the content of the `OVERLAY' into the context buffer.
+  "Insert the content of the `OVERLAY' into the context buffer.
 We create a corresponding overlay in the context buffer to keep track
 of the original context chunks."
-   (let ((start (overlay-start overlay))
-         (end (overlay-end overlay))
-         (source-buffer (overlay-buffer overlay))
-         (target-buffer (ellm-get-or-create-context-buffer)))
-     (with-current-buffer target-buffer
-       (goto-char (point-max))
-       (let ((inhibit-read-only t)
-             (insert-start (point)))
-         (insert (with-current-buffer source-buffer
-                   (buffer-substring start end)))
-         (let* ((insert-end (point))
-                (new-overlay (make-overlay insert-start insert-end)))
-           (newline 2)
-           (overlay-put new-overlay 'ellm-context t)
-           (overlay-put new-overlay 'face 'ellm-context-buffer-face)
-           (overlay-put new-overlay 'ellm-other-overlay overlay)
-           (overlay-put overlay 'ellm-other-overlay new-overlay))))))
+  (let ((start (overlay-start overlay))
+        (end (overlay-end overlay))
+        (source-buffer (overlay-buffer overlay))
+        (target-buffer (ellm-get-or-create-context-buffer)))
+    (with-current-buffer target-buffer
+      (goto-char (point-max))
+      (let ((inhibit-read-only t)
+            (insert-start (point)))
+        (insert (with-current-buffer source-buffer
+                  (buffer-substring start end)))
+        (let* ((insert-end (point))
+               (new-overlay (make-overlay insert-start insert-end)))
+          (newline 2)
+          (overlay-put new-overlay 'ellm-context t)
+          (overlay-put new-overlay 'face 'ellm-context-buffer-face)
+          (overlay-put new-overlay 'ellm-other-overlay overlay)
+          (overlay-put overlay 'ellm-other-overlay new-overlay))))))
 
 (defun ellm--try-delete-context-content (overlay)
   "Delete the content of the `OVERLAY' from the context buffer.
@@ -1817,30 +1817,30 @@ is not found, do nothing."
   :group 'ellm
   :lighter " ellm"
   :keymap (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c ;") (make-sparse-keymap))
-    (define-key map (kbd "C-c ; N") #'ellm-chat-at-point)
-    (define-key map (kbd "C-c ; n") #'ellm-context-complete)
-    (define-key map (kbd "C-c ; e") #'ellm-export-conversation)
-    (define-key map (kbd "C-c ; r") #'ellm-org-rate-response-and-refresh)
-    (define-key map (kbd "C-c ; c") #'ellm-set-config)
-    (define-key map (kbd "C-c ; ;") #'ellm-show-conversations-buffer)
-    (define-key map (kbd "C-c ; s") #'ellm-search-in-conversations)
-    (define-key map (kbd "C-c ; o") #'ellm-org-fold-conversations-buffer)
-    (define-key map (kbd "C-c ; j") #'ellm-org-next-message)
-    (define-key map (kbd "C-c ; k") #'ellm-org-previous-message)
-    (define-key map (kbd "C-c ; m") #'ellm-add-context-chunk)
-    (define-key map (kbd "C-c ; d") #'ellm-remove-context-chunk)
-    (define-key map (kbd "C-c ; x") #'ellm-view-context-buffer)
-    (define-key map (kbd "C-c ; C-M-k") #'ellm-clear-context)
-    map))
+            (define-key map (kbd "C-c ;") (make-sparse-keymap))
+            (define-key map (kbd "C-c ; N") #'ellm-chat-at-point)
+            (define-key map (kbd "C-c ; n") #'ellm-context-complete)
+            (define-key map (kbd "C-c ; e") #'ellm-export-conversation)
+            (define-key map (kbd "C-c ; r") #'ellm-org-rate-response-and-refresh)
+            (define-key map (kbd "C-c ; c") #'ellm-set-config)
+            (define-key map (kbd "C-c ; ;") #'ellm-show-conversations-buffer)
+            (define-key map (kbd "C-c ; s") #'ellm-search-in-conversations)
+            (define-key map (kbd "C-c ; o") #'ellm-org-fold-conversations-buffer)
+            (define-key map (kbd "C-c ; j") #'ellm-org-next-message)
+            (define-key map (kbd "C-c ; k") #'ellm-org-previous-message)
+            (define-key map (kbd "C-c ; m") #'ellm-add-context-chunk)
+            (define-key map (kbd "C-c ; d") #'ellm-remove-context-chunk)
+            (define-key map (kbd "C-c ; x") #'ellm-view-context-buffer)
+            (define-key map (kbd "C-c ; C-M-k") #'ellm-clear-context)
+            map))
 
 (defun ellm-cleanup ()
   "Clean up the ellm context buffer and overlays."
   (ellm-clear-context)
   (dolist (buffer (list ellm--context-buffer-name
-                            ellm--log-buffer-name
-                            ellm--temp-conversations-buffer-name))
-        (ignore-errors (kill-buffer buffer))))
+                        ellm--log-buffer-name
+                        ellm--temp-conversations-buffer-name))
+    (ignore-errors (kill-buffer buffer))))
 
 ;;;###autoload
 (define-globalized-minor-mode global-ellm-mode ellm-mode
