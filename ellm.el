@@ -295,17 +295,17 @@ See `ellm--add-context-from-region' for usage details.")
 (defvar ellm-auto-export nil
   "If non-nil, the chat is automatically exported when the response is received.")
 
-(defvar ellm--is-external nil
-  "If non-nil, the chat is being conducted in an external chat buffer.")
-
-(defvar ellm--last-conversation-exported-id nil
-  "The ID of the last conversation exported to an external chat buffer.")
-
-(defconst ellm--log-buffer-name "*ELLM-Logs*"
+(defconst ellm--log-buffer-name "*ellm-logs*"
   "Log buffer for LLM messages.")
 
-(defconst ellm--temp-conversations-buffer-name "*LLM Conversations*"
+(defconst ellm--temp-conversations-buffer-name "*ellm-test*"
   "The file to store conversation history.")
+
+(defconst ellm--server-buffer-name "*ellm-server*"
+  "The name of the buffer used to display the ellm server output.")
+
+(defconst ellm--context-buffer-name "*ellm-context*"
+  "The name of the buffer used to display the context chunks.")
 
 (defvar ellm-provider-configurations
   `((openai . ((prepare-request-headers . ellm--prepare-request-headers-default)
@@ -332,12 +332,22 @@ See `ellm--add-context-from-region' for usage details.")
 
 (declare-function password-store-get "password-store.el" (entry))
 
+(defmacro ellm-configure-password-store (api-keys)
+  "Define API key getter functions for the given `API-KEYS'."
+  `(progn
+     ,@(mapcar (lambda (key-info)
+                 (when-let ((provider (plist-get key-info :provider)))
+                   `(defun ,(intern (format "ellm--get-%s-api-key-from-password-store" provider)) ()
+                      ,(format "Get the %s API key from the password store." provider)
+                      (password-store-get ,(plist-get key-info :password-store-path)))))
+                 api-keys)))
+
 (defun ellm-get-api-key-from-password-store ()
   "Get the API key from the password store.
 The password store entry is gotten by evaluating
-the `ellm-password-store-path-by-provider' function with the value
-of `ellm-provider'."
-  (password-store-get (funcall ellm-password-store-path-by-provider ellm-provider)))
+the `ellm--get-<PROVIDER>-api-key-from-password-store' for PROVIDER given by
+the valueof `ellm-provider'."
+  (funcall (intern (format "ellm--get-%s-api-key-from-password-store" ellm-provider))))
 
 ; TODO Use this to configure the providers
 (defmacro ellm-define-provider (name &rest config)
@@ -1352,16 +1362,16 @@ using this function."
   (goto-char (point-min))
   (org-goto-first-child))
 
-(defun ellm--setup-persistance ()
+(defun ellm-setup-persistance ()
   "Register ellm configuration variables with the `savehist' package.
 This function is responsible for maintaining the persistence of certain
 configuration variables used by the ellm package. It does this by adding
 those variables to the `savehist-additional-variables' list. This ensures
 that the values of these variables are saved and restored across Emacs
 sessions.
-The variables that are registered for persistence are
+The variables registered for persistence are
 `ellm-current-system-message', `ellm-max-tokens', `ellm-model-size',
-`ellm-provider', `ellm-temperature' and `ellm--debug-mode'.
+`ellm-provider', `ellm-model', `ellm-temperature' and `ellm--debug-mode'.
 Additionally, the `ellm--prompt-history' is persisted to maintain the prompt
 history.
 This function does not take any arguments and returns nil."
@@ -1369,6 +1379,7 @@ This function does not take any arguments and returns nil."
                           ellm-max-tokens
                           ellm-model-size
                           ellm-provider
+                          ellm-model
                           ellm-temperature
                           ellm--debug-mode
                           ellm--prompt-history)))
@@ -1536,9 +1547,6 @@ Note that `FILENAME' should be an absolute path to the file."
 (defvar ellm--server-process nil
   "The process object for the ellm server.")
 
-(defconst ellm--server-buffer-name "*ellm server*"
-  "The name of the buffer used to display the ellm server output.")
-
 (defun ellm--server-running-p ()
   "Return non-nil if the ellm server is running."
   (and ellm--server-process (process-live-p ellm--server-process)))
@@ -1601,9 +1609,6 @@ Note that `FILENAME' should be an absolute path to the file."
                 (lambda (&key error-thrown &allow-other-keys)
                   (message "Error: %S" error-thrown)))))))
 
-(defconst ellm--context-buffer-name "*ellm context*"
-  "The name of the buffer used to display the context chunks.")
-
 (defface ellm-context-buffer-face
   '((((background dark)) (:background "#328C0411328C" :extend t))  ; Very dark magenta
     (t                   (:background "#CD73FBEECD73" :extend t))) ; Very pale green
@@ -1623,17 +1628,6 @@ Note that `FILENAME' should be an absolute path to the file."
 (defvar ellm-context-overlays nil
   "List of overlays representing context chunks.")
 
-(defun ellm--context-buffer-setup ()
-  "Setup the context buffer."
-  (with-current-buffer (get-buffer-create ellm--context-buffer-name)
-    (ellm-context-buffer-mode)
-    (current-buffer)))
-
-(defun ellm--get-or-create-context-buffer ()
-  "Return the context buffer, setting it up it does not exist."
-  (or (get-buffer ellm--context-buffer-name)
-      (ellm--context-buffer-setup)))
-
 (defun ellm--context-at (posn)
   "Return the context overlay at position `POSN'."
   (let ((overlays (overlays-at posn)))
@@ -1646,11 +1640,9 @@ Note that `FILENAME' should be an absolute path to the file."
 
 (defun ellm--context-buffer-overlay (overlay)
   "Return the context overlay in the context buffer corresponding to `OVERLAY'."
-  (unless (and (ellm--overlay-context-overlay-p overlay)
-               (buffer-live-p (overlay-buffer overlay)))
-    (error "Not a valid context chunk overlay: %S" overlay))
-  (if (buffer-match-p (ellm--get-or-create-context-buffer) (overlay-buffer overlay))
-      overlay (overlay-get overlay 'ellm-other-overlay)))
+  (if (buffer-match-p ellm--context-buffer-name (overlay-buffer overlay))
+      overlay
+    (overlay-get overlay 'ellm-other-overlay)))
 
 (defun ellm--overlay-context-overlay-p (overlay)
   "Return non-nil if `OVERLAY' is a context overlay."
@@ -1659,7 +1651,6 @@ Note that `FILENAME' should be an absolute path to the file."
 (defun ellm--overlay-empty-p (overlay)
   "Return non-nil if `OVERLAY' is empty or deleted."
   (or (null (overlay-buffer overlay))
-      (not (buffer-live-p (overlay-buffer overlay)))
       (= (overlay-start overlay) (overlay-end overlay))))
 
 (defun ellm-add-context-chunk ()
@@ -1709,8 +1700,9 @@ We create a corresponding overlay in the context buffer to keep track
 of the original context chunks."
    (let ((start (overlay-start overlay))
          (end (overlay-end overlay))
-         (source-buffer (overlay-buffer overlay)))
-     (with-current-buffer ellm--context-buffer-name
+         (source-buffer (overlay-buffer overlay))
+         (target-buffer (ellm-get-or-create-context-buffer)))
+     (with-current-buffer target-buffer
        (goto-char (point-max))
        (let ((inhibit-read-only t)
              (insert-start (point)))
@@ -1730,14 +1722,15 @@ If the overlay is not in the context buffer, is empty, deleted or
 is not found, do nothing."
   (when (and overlay
              (not (ellm--overlay-empty-p overlay))
-             (buffer-match-p (ellm--get-or-create-context-buffer) (overlay-buffer overlay))
+             (buffer-match-p ellm--context-buffer-name
+                             (overlay-buffer overlay)))
     (with-current-buffer (overlay-buffer overlay)
       (let ((inhibit-read-only t)
             (start (overlay-start overlay))
             (end (overlay-end overlay)))
         (when (and start end)
           (delete-region start end)
-          (delete-blank-lines)))))))
+          (delete-blank-lines))))))
 
 (defun ellm-remove-context-chunk (&optional overlay)
   "Remove the content of the `OVERLAY' from the context buffer."
@@ -1748,8 +1741,7 @@ is not found, do nothing."
   (unless (or overlay (setq overlay (ellm--context-at (point))))
     (error "No context overlay at point: %S" (point)))
   (let* ((context-buffer-ov (ellm--context-buffer-overlay overlay))
-         (context-ov (if (null context-buffer-ov) overlay
-                       (overlay-get context-buffer-ov 'ellm-other-overlay))))
+         (context-ov (overlay-get context-buffer-ov 'ellm-other-overlay)))
     (ellm--try-delete-context-content context-buffer-ov)
     (delete-overlay context-buffer-ov)
     (delete-overlay context-ov)
@@ -1758,7 +1750,7 @@ is not found, do nothing."
 (defun ellm-view-context-buffer ()
   "View the context overlays in the current buffer."
   (interactive)
-  (let ((buffer (ellm--get-or-create-context-buffer)))
+  (let ((buffer (ellm-get-or-create-context-buffer)))
     (pop-to-buffer buffer)
     (goto-char (point-min))
     (recenter 4)))
@@ -1768,13 +1760,13 @@ is not found, do nothing."
   (interactive)
   (seq-do #'delete-overlay ellm-context-overlays)
   (setq ellm-context-overlays nil)
-  (when-let ((context-buffer (get-buffer ellm--context-buffer-name)))
-    (when (buffer-live-p context-buffer)
-      (with-current-buffer (ellm--get-or-create-context-buffer)
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (seq-do #'delete-overlay (overlays-in (point-min) (point-max)))))))
-  (message "All context chunks cleared"))
+  (let ((buffer (ellm-get-or-create-context-buffer)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (remove-hook 'kill-buffer-hook #'ellm-clear-context t))
+      (kill-buffer buffer)))
+  (when (called-interactively-p 'any)
+    (message "All context chunks cleared")))
 
 (defun ellm-context--build-prompt-wrapper ()
   "Use the context accumulated in the context buffer for a prompt."
@@ -1784,7 +1776,7 @@ is not found, do nothing."
             (context-overlays
              (seq-filter
               #'ellm--overlay-context-overlay-p
-              (with-current-buffer (ellm--get-or-create-context-buffer)
+              (with-current-buffer (ellm-get-or-create-context-buffer)
                 (overlays-in (point-min) (point-max)))))
             (context-string
              (mapconcat (lambda (ov) (ellm--prepare-context-chunk ov))
@@ -1800,14 +1792,24 @@ is not found, do nothing."
 
 (defvar ellm-context-buffer-keymap
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c C-c") 'ellm-complete-context)
+    (define-key map (kbd "C-c C-c") 'ellm-context-complete)
+    (define-key map (kbd "C-c C-k") 'ellm-clear-context)
     (define-key map (kbd "d") 'ellm-remove-context-chunk)
     map)
   "Keymap for `ellm-context-buffer-mode'.")
 
 (define-derived-mode ellm-context-buffer-mode special-mode "ellm-context"
   "Major mode for managing the ellm context buffer."
-  (use-local-map ellm-context-buffer-keymap))
+  (use-local-map (make-composed-keymap ellm-context-buffer-keymap special-mode-map))
+  (add-hook 'kill-buffer-hook #'ellm-clear-context nil t))
+
+(defun ellm-get-or-create-context-buffer ()
+  "Return the context buffer, creating it if necessary."
+  (let ((buffer (get-buffer-create ellm--context-buffer-name)))
+    (with-current-buffer buffer
+      (unless (eq major-mode 'ellm-context-buffer-mode)
+        (ellm-context-buffer-mode)))
+    buffer))
 
 ;;;###autoload
 (define-minor-mode ellm-mode
@@ -1830,23 +1832,25 @@ is not found, do nothing."
     (define-key map (kbd "C-c ; d") #'ellm-remove-context-chunk)
     (define-key map (kbd "C-c ; x") #'ellm-view-context-buffer)
     (define-key map (kbd "C-c ; C-M-k") #'ellm-clear-context)
-    map)
-  :global nil)
+    map))
 
-;;;###autoload
-(define-globalized-minor-mode global-ellm-mode ellm-mode
-  (lambda ()
-    (if global-ellm-mode
-        (and
-          (ellm--setup-persistance)
-          (ellm--context-buffer-setup))
-      (dolist (buffer (list ellm--context-buffer-name
+(defun ellm-cleanup ()
+  "Clean up the ellm context buffer and overlays."
+  (ellm-clear-context)
+  (dolist (buffer (list ellm--context-buffer-name
                             ellm--log-buffer-name
                             ellm--temp-conversations-buffer-name))
         (ignore-errors (kill-buffer buffer))))
-    (ellm-mode))
-  :global t
+
+;;;###autoload
+(define-globalized-minor-mode global-ellm-mode ellm-mode
+  (lambda () (ellm-mode 1))
   :group 'ellm)
+
+(add-hook 'global-ellm-mode-hook
+          (lambda ()
+            (unless global-ellm-mode
+              (ellm-cleanup))))
 
 (add-hook 'kill-emacs-hook 'ellm-stop-server)
 
