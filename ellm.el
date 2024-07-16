@@ -341,7 +341,8 @@ See `ellm--add-context-from-region' for usage details.")
 
 (defun ellm-get-api-key-from-password-store ()
   "Get the API key from the password store for the current PROVIDER."
-  (funcall (intern (format "ellm--get-%s-api-key-from-password-store" ellm-provider))))
+  (let ((func (intern (format "ellm--get-%s-api-key-from-password-store" ellm-provider))))
+    (funcall func)))
 
 ;; TODO Use something like this to configure the providers
 (defmacro ellm-define-provider (name &rest config)
