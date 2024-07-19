@@ -50,8 +50,8 @@
   :type 'integer
   :group 'ellm)
 
-(defcustom ellm-get-api-key 'ellm-get-api-key-from-env
-  "The function which retrieves your API key for the current provider."
+(defcustom ellm-api-key #'ellm-api-key-from-env
+  "A function taking a PROVIDER and returning its API key."
   :type 'function
   :group 'ellm)
 
@@ -179,6 +179,10 @@
   (seq-uniq (mapcar
              (lambda (model)
                (plist-get (cdr model) :provider)) ellm-model-alist)))
+
+(defun ellm-api-key (provider)
+  "Get the api key for `PROVIDER'."
+  (funcall (symbol-value 'ellm-api-key) provider))
 
 (defcustom ellm-save-conversations t
   "If non-nil, save the conversation history to `ellm--conversations-file'."
@@ -325,24 +329,9 @@ See `ellm--add-context-from-region' for usage details.")
                 (models-alist . ,ellm--mistral-models-alist))))
   "Alist mapping providers to their API configurations.")
 
-(defun ellm-get-api-key-from-env ()
+(defun ellm-api-key-from-env (provider)
   "Get the API key from the environment for the `PROVIDER'."
-  (getenv (format "%s_API_KEY" (upcase (symbol-name ellm-provider)))))
-
-(defmacro ellm-configure-password-store (api-keys)
-  "Define API key getter functions for the given `API-KEYS'."
-  `(progn
-     ,@(mapcar (lambda (key-info)
-                 (when-let ((provider (plist-get key-info :provider)))
-                   `(defun ,(intern (format "ellm--get-%s-api-key-from-password-store" provider)) ()
-                      ,(format "Get the %s API key from the password store." provider)
-                      (password-store-get ,(plist-get key-info :password-store-path)))))
-               api-keys)))
-
-(defun ellm-get-api-key-from-password-store ()
-  "Get the API key from the password store for the current PROVIDER."
-  (let ((func (intern (format "ellm--get-%s-api-key-from-password-store" ellm-provider))))
-    (funcall func)))
+  (getenv (format "%s_API_KEY" (upcase (symbol-name provider)))))
 
 ;; TODO Use something like this to configure the providers
 (defmacro ellm-define-provider (name &rest config)
@@ -859,15 +848,15 @@ Return the conversation-data alist."
 
 (defun ellm--prepare-request-headers-default ()
   "Prepare the headers for API requests as done for openai models.
-The `ellm-get-api-key' function is used to retrieve the api key
+The `ellm-api-key' function is used to retrieve the api key
 for the current provider, which is stored in `ellm-provider'."
-  `(("Authorization" . ,(concat "Bearer " (funcall ellm-get-api-key)))
+  `(("Authorization" . ,(concat "Bearer " (funcall ellm-api-key ellm-provider)))
     ("Content-Type" . "application/json; charset=utf-8")))
 
 (defun ellm--prepare-request-headers-anthropic ()
   "Prepare the headers for API requests to the anthropic models.
-The `ellm-get-api-key' function is used to retrieve the api key."
-  `(("x-api-key" . ,(funcall ellm-get-api-key))
+The `ellm-api-key' function is used to retrieve the api key."
+  `(("x-api-key" . ,(funcall ellm-api-key ellm-provider))
     ("anthropic-version" . "2023-06-01")
     ("Content-Type" . "application/json; charset=utf-8")))
 
@@ -1697,24 +1686,19 @@ Note that `FILENAME' should be an absolute path to the file."
   "Start the ellm Node.js server."
   (interactive)
   (unless (ellm--server-running-p)
-    (let ((default-directory (file-name-directory (locate-library "ellm")))
-          (prev-provider ellm-provider))
-      (ellm-set-provider 'openai)
-      (let ((openai-api-key (ellm-get-api-key-from-env)))
-        (unless openai-api-key
-          (setenv "OPENAI_API_KEY" (funcall ellm-get-api-key))))
-      (ellm-set-provider 'anthropic)
-      (let ((anthropic-api-key (ellm-get-api-key-from-env)))
-        (unless anthropic-api-key
-          (setenv "ANTHROPIC_API_KEY" (funcall ellm-get-api-key))))
-      (ellm-set-provider prev-provider))
-    (setq ellm--server-process
-          (start-process "ellm-server" ellm--server-buffer-name
-                         "node" "--trace-deprecation"
-                         (expand-file-name "server.js")
-                         "--host" ellm-server-host
-                         "--port" (number-to-string ellm-server-port)))
-    (message "ellm webserver started")))
+    (let ((default-directory (file-name-directory (locate-library "ellm"))))
+      (dolist (provider (ellm-providers-supported))
+        (let ((api-key (ellm-api-key provider)))
+          (if (not (string-empty-p api-key))
+              (setenv (format "%s_API_KEY" (symbol-name provider)) api-key)
+            (message "WARNING: ellm-start-server: No api key set for %s" (symbol-name provider)))))
+      (setq ellm--server-process
+        (start-process "ellm-server" ellm--server-buffer-name
+                       "node" "--trace-deprecation"
+                       (expand-file-name "server.js")
+                       "--host" ellm-server-host
+                       "--port" (number-to-string ellm-server-port)))
+    (message "ellm webserver started"))))
 
 (defun ellm-stop-server ()
   "Stop the ellm Node.js server."
