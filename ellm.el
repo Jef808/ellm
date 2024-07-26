@@ -758,13 +758,6 @@ following special values for `IMAGE-P':
          (data (if image-p (ellm--encode-image content image-p) content)))
     `((role . ,role) (content . (,`((type . ,type) (,type . ,data)))))))
 
-    ;;   (unless (stringp content)
-    ;;     (error "Invalid message content: %S" content))
-    ;;   )
-    ;; `((role . ,role) (content . ((type . ,type) (,type . ,data))))))
-    ;;   (setq message-content (list `((type . text) (text . ,content))))
-    ;; `((role . ,role) (content . ,message-content))))
-
 (defun ellm--encode-image (image flag)
   "Encode the `IMAGE' based on the `FLAG'.
 The `FLAG' is as `IMAGE-P' in `ellm--make-message' (which see)."
@@ -1609,7 +1602,7 @@ When at the top of the conversation, fold the subtree."
          (doc (funcall documentation-fn (symbol-at-point))))
     (cons symbol doc)))
 
-                                        ; TODO Make this more portable by using different search tools as available.
+;; TODO Make this more portable by using different search tools as available.
 (defun ellm-search-in-conversations (&optional pattern)
   "Search for headlines matching `PATTERN' in the conversations files."
   (interactive)
@@ -1680,25 +1673,31 @@ Note that `FILENAME' should be an absolute path to the file."
 
 (defun ellm--server-running-p ()
   "Return non-nil if the ellm server is running."
-  (and ellm--server-process (process-live-p ellm--server-process)))
+  (when (and ellm--server-process
+             (process-live-p ellm--server-process))))
 
 (defun ellm-start-server ()
   "Start the ellm Node.js server."
   (interactive)
   (unless (ellm--server-running-p)
-    (let ((default-directory (file-name-directory (locate-library "ellm"))))
-      (dolist (provider (ellm-providers-supported))
-        (let ((api-key (ellm-api-key provider)))
-          (if (not (string-empty-p api-key))
-              (setenv (format "%s_API_KEY" (symbol-name provider)) api-key)
-            (message "WARNING: ellm-start-server: No api key set for %s" (symbol-name provider)))))
+    (dolist (provider (ellm-providers-supported))
+      (let ((api-key (ellm-api-key provider)))
+        (if (not (string-empty-p api-key))
+            (setenv (format "%s_API_KEY" (upcase (symbol-name provider))) api-key)
+          (message "WARNING: ellm-start-server: No api key set for %s" (symbol-name provider)))))
+    (let* ((dir (file-name-directory (locate-library "ellm")))
+           (server-js (expand-file-name "server/server.js" dir)))
       (setq ellm--server-process
-        (start-process "ellm-server" ellm--server-buffer-name
-                       "node" "--trace-deprecation"
-                       (expand-file-name "server.js")
-                       "--host" ellm-server-host
-                       "--port" (number-to-string ellm-server-port)))
-    (message "ellm webserver started"))))
+            (start-process "ellm-server" ellm--server-buffer-name
+                           "node" server-js
+                           "--trace-deprecation"
+                           "--host" ellm-server-host
+                           "--port" (number-to-string ellm-server-port)
+                           server-js))
+      (if (ellm--server-running-p)
+          (message "ellm server: listening at http://%s:%s" ellm-server-host (number-to-string ellm-server-port))
+        (message "ellm server: failed to start"))))
+  nil)
 
 (defun ellm-stop-server ()
   "Stop the ellm Node.js server."
@@ -1741,7 +1740,8 @@ Note that `FILENAME' should be an absolute path to the file."
   "Face for context overlays in the ellm context buffer."
   :group 'ellm)
 
-(defvar ellm-context-buffer-face 'ellm-context-buffer-face)
+(defvar ellm-context-buffer-face 'ellm-context-buffer-face
+  "Face for context overlays in the ellm context buffer.")
 
 (defface ellm-context-face
   '((((background dark)) (:background "#111313F03181" :extend t))  ; Very dark blue
@@ -1749,7 +1749,8 @@ Note that `FILENAME' should be an absolute path to the file."
   "Face for context overlays in their original buffer."
   :group 'ellm)
 
-(defvar ellm-context-face 'ellm-context-face)
+(defvar ellm-context-face 'ellm-context-face
+  "Face for context overlays in their original buffer.")
 
 (defvar ellm-context-overlays nil
   "List of overlays representing context chunks.")
