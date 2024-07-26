@@ -1755,9 +1755,13 @@ Note that `FILENAME' should be an absolute path to the file."
 (defvar ellm-context-overlays nil
   "List of overlays representing context chunks.")
 
-(defun ellm--context-at (posn)
-  "Return the context overlay at position `POSN'."
-  (let ((overlays (overlays-at posn)))
+(defun ellm--context-at (posm)
+  "Return the context overlay at position or marker `POSM'."
+  (let* ((beg
+          (save-excursion
+            (goto-char posm)
+            (if (bolp) posm (- posm 1))))
+         (overlays (overlays-in beg posm)))
     (seq-find #'ellm--overlay-context-overlay-p overlays)))
 
 (defun ellm--contexts-in-region (beg end)
