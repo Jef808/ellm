@@ -29,8 +29,6 @@
 (require 'savehist)
 (require 'url)
 
-(declare-function password-store-get "password-store.el" (entry))
-
 (defgroup ellm nil
   "Make API calls to LLMs."
   :group 'applications
