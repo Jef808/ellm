@@ -1,14 +1,14 @@
 ;;; ellm.el --- Description -*- lexical-binding: t; -*-
 ;;
-;; Copyright (C) 2024 Jean-Francois Arbour
+;; Copyright (C) 2024 Jean-François Arbour
 ;;
-;; Author: Jean-Francois Arbour <jf.arbour@gmail.com>
-;; Maintainer: Jean-Francois Arbour <jf.arbour@gmail.com>
+;; Author: Jean-François Arbour <jf.arbour@gmail.com>
+;; Maintainer: Jean-François Arbour <jf.arbour@gmail.com>
 ;; Created: March 25, 2024
-;; Modified: March 25, 2024
-;; Version: 0.0.1
-;; Keywords: abbrev bib c calendar comm convenience data docs emulations extensions faces files frames games hardware help hypermedia i18n internal languages lisp local maint mail matching mouse multimedia news outlines processes terminals tex tools unix vc wp
-;; Homepage: https://github.com/Jef808/emacs-llm
+;; Modified: August 02, 2024
+;; Version: 1.0.0
+;; Keywords: comm convenience data docs extensions faces files help hypermedia languages local matching multimedia outlines tools
+;; Homepage: https://github.com/Jef808/ellm
 ;; Package-Requires: ((emacs "29.1"))
 ;;
 ;; This file is not part of GNU Emacs.
