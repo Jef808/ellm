@@ -24,7 +24,6 @@
 (require 'project)
 (require 'markdown-mode)
 (require 'org-element)
-(require 'org-fold)
 (require 'org-id)
 (require 'ox-html)
 (require 'savehist)
@@ -271,7 +270,20 @@ Maintain a focus on technical precision and completeness without redundant expla
 The content of those messages are the system messages that will be used as
 instructions for the language models in new conversations."
   :safe #'always
-  :type '(alist :key-type symbol :value-type plist)
+  :type '(alist :key-type symbol
+                :value-type (choice
+                             (list :tag "String message"
+                                   (const :type)
+                                   (const string)
+                                   (const :value)
+                                   string)
+                             (list :tag "Function message"
+                                   (const :type)
+                                   (const function)
+                                   (const :args)
+                                   (repeat symbol)
+                                   (const :value)
+                                   function)))
   :group 'ellm)
 
 (defvar ellm-current-system-message 'default
@@ -1761,7 +1773,8 @@ Note that `FILENAME' should be an absolute path to the file."
           (save-excursion
             (goto-char posm)
             (if (bolp) posm (- posm 1))))
-         (overlays (overlays-in beg posm)))
+         (end (max posm (+ 1 beg)))
+         (overlays (overlays-in beg end)))
     (seq-find #'ellm--overlay-context-overlay-p overlays)))
 
 (defun ellm--contexts-in-region (beg end)
