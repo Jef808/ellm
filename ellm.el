@@ -227,8 +227,8 @@ Instead, focus on providing clear, relevant examples and the technical aspects \
 of the subject at hand.")
     (question-and-answer :type string
                          :value "You are an expert technical assistant integrated with Emacs.
-Your primary task is to precisely and accurately answer the user's technical questions.
-When answering, ensure that your responses are directly relevant to the question asked.
+Your primary task is to accurately answer the user's technical questions.
+When answering, ensure that your responses are directly relevant to the question asked and delve in the technicalities when possible.
 If you are unsure or don't have enough information to provide a confident answer, \
 simply say \"I don't know\" or \"I'm not sure.\"
 Avoid unnecessary politeness details and focus on accuracy and relevance.")
@@ -263,7 +263,32 @@ Provide well-commented, clean, and efficient code samples.
 If the problem can be solved in multiple ways, briefly state the options and recommend the most efficient one.
 3When you encounter incomplete or ambiguous instructions, seek clarifications from the user.
 Maintain a focus on technical precision and completeness without redundant explanations or politeness."
-                                      language))))
+                                      language)))
+    (prompt-generator :type string
+                      :value "I want you to act as a prompt generator.
+Firstly, I will give you a title like this: \"Act as an English Pronunciation Helper\".
+Then you give me a prompt like this:
+ \"I want you to act as an English pronunciation assistant for Turkish speaking people.
+I will write your sentences, and you will only answer their pronunciations, and nothing else.
+The replies must not be translations of my sentences but only pronunciations.
+Pronunciations should use Turkish Latin letters for phonetics.
+Do not write explanations on replies.\"
+(You should adapt the sample prompt according to the title I gave. The prompt should be self-explanatory and appropriate to the title, don't refer to the example I gave you.)")
+    (software-architect :type string
+                        :value "I want you to act as a software architecture blueprint generator. I will
+provide you with a brief description of a software project, and you will
+create a high-level architectural design for it. Your blueprint should
+include:
+
+1. A brief overview of the system's main components
+2. The relationships and interactions between these components
+3. Key design patterns or architectural styles to be used
+4. Considerations for scalability, security, and performance
+5. Potential technologies or frameworks to be utilized
+
+Please present your blueprint in a clear, structured format using
+markdown. Include a simple diagram using ASCII art if possible. Do not
+implement any code; focus solely on the architectural design."))
   "Alist mapping system message names to their content.
 The content of those messages are the system messages that will be used as
 instructions for the language models in new conversations."
@@ -572,13 +597,18 @@ When togling off, restore the previously set values."
           (get-buffer-create ellm--temp-conversations-buffer-name)
         (org-mode)
         (goto-char (point-min))
-        (let ((plist ellm-org--buffer-props))
-          (while plist
-            (let ((prop (substring (symbol-name (car plist)) 1))
-                  (value (cadr plist)))
-              (insert (format "#+%s: %s\n" prop value)))
-            (setq plist (cddr plist))))
+        (insert (ellm--conversations-file-header))
         (message "...ellm-test-mode enabled...")))))
+
+(defun ellm--conversations-file-header ()
+  "Concatenate `ellm-org--buffer-props' into a header string."
+  (with-temp-buffer
+    (let ((plist ellm-org--buffer-props))
+      (while plist
+        (let ((prop (substring (symbol-name (car plist)) 1))
+              (value (cadr plist)))
+          (insert (format "#+%s: %s\n" prop value)))))
+    (buffer-string)))
 
 (defun ellm-toggle-debug-mode ()
   "Toggle debug mode."
@@ -597,29 +627,25 @@ When togling off, restore the previously set values."
   (interactive)
   (setq ellm-save-conversations (not ellm-save-conversations)))
 
+(defun ellm--true-false-menu-item (item-title ptrue)
+  "Return a menu description for `ITEM-TITLE' with a true/false value.
+Its value will be a propertized t if `PTRUE' is non-nil, nil otherwise."
+  (let ((padding (make-string (- 32 (length item-title)) ? ))
+        (value (if ptrue (propertize "t" 'face 'font-lock-builtin-face)
+                    (propertize "nil" 'face 'font-lock-comment-face))))
+    (format "%s%s%s" item-title padding value)))
+
 (defun ellm--toggle-save-conversations-description ()
   "Return a string describing the current save conversations setting."
-  (format "Save Conversations to file      %s"
-          (propertize (if ellm-save-conversations "t" "nil")
-                      'face (if ellm-save-conversations
-                                'font-lock-builtin-face
-                              'font-lock-comment-face))))
+  (ellm--true-false-menu-item "Save Conversations to File" ellm-save-conversations))
 
 (defun ellm--toggle-test-mode-description ()
   "Return a string describing the current save conversations setting."
-  (format "Test Mode                       %s"
-          (propertize (if ellm--test-mode "t" "nil")
-                      'face (if ellm--test-mode
-                                'font-lock-builtin-face
-                              'font-lock-comment-face))))
+  (ellm--true-false-menu-item "Test Mode" ellm--test-mode))
 
 (defun ellm--toggle-debug-mode-description ()
   "Return a string describing the current debug mode setting."
-  (format "Debug Mode                      %s"
-          (propertize (if ellm--debug-mode "t" "nil")
-                      'face (if ellm--debug-mode
-                                'font-lock-builtin-face
-                              'font-lock-comment-face))))
+  (ellm--true-false-menu-item "Debug Mode" ellm--debug-mode))
 
 (defun ellm--get-conversation-model (conversation)
   "Get the model used in the `CONVERSATION'."
@@ -1369,9 +1395,8 @@ Optionally, the content of that message can be passed as the `PROMPT' argument."
   (interactive)
   (unless (ellm--point-at-conversation-p)
     (user-error "Point is not within a conversation"))
-  (let ((id
-         (unless (ellm--at-temp-conversations-buffer-p)
-           (org-entry-get (point) "ID" t))))
+  (let ((id (unless (ellm--at-temp-conversations-buffer-p)
+              (org-entry-get (point) "ID" t))))
     (ellm--resume-conversation id prompt)))
 
 (defun ellm-chat-external (selection &optional id)
