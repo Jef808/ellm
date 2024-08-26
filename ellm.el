@@ -415,6 +415,27 @@ system message function, if there are any."
   "Get the configuration for the `PROVIDER'."
   (alist-get provider ellm-provider-configurations))
 
+(defun ellm-set-config ()
+  "Call the `SETTING-FUNCTION' according to the user's choice."
+  (interactive)
+  (while-let ((config-function (ellm--config-prompt)))
+    (funcall-interactively config-function)))
+
+(defun ellm--config-prompt ()
+  "Prompt the user to choose a setting to configure."
+  (let ((choices
+         (list (cons (ellm--toggle-test-mode-description) #'ellm-toggle-test-mode)
+               (cons (ellm--toggle-save-conversations-description) #'ellm-toggle-save-conversations)
+               (cons (ellm--toggle-debug-mode-description) #'ellm-toggle-debug-mode)
+               (cons (ellm--provider-description) #'ellm-set-provider)
+               (cons (ellm--model-size-description) #'ellm-set-model-size)
+               (cons (ellm--temperature-description) #'ellm-set-temperature)
+               (cons (ellm--max-tokens-description) #'ellm-set-max-tokens)
+               (cons (ellm--system-message-description) #'ellm-set-system-message))))
+    (alist-get
+     (completing-read "Choose a setting to configure: " (mapcar 'car choices))
+     choices nil nil 'equal)))
+
 (defun ellm-set-system-message (&optional system-message)
   "Set the `SYSTEM-MESSAGE' to use for the next prompt."
   (interactive)
@@ -518,57 +539,6 @@ system message function, if there are any."
     (setq ellm-temperature temp)
     (message "...temperature set to %s..." ellm-temperature)))
 
-(defun ellm-set-config ()
-  "Call the `SETTING-FUNCTION' according to the user's choice."
-  (interactive)
-  (while-let ((config-function (ellm--config-prompt)))
-    (funcall-interactively config-function)))
-
-(defun ellm--config-prompt ()
-  "Prompt the user to choose a setting to configure."
-  (let ((choices (list
-                  (cons (ellm--toggle-test-mode-description) #'ellm-toggle-test-mode)
-                  (cons (ellm--toggle-save-conversations-description) #'ellm-toggle-save-conversations)
-                  (cons (ellm--toggle-debug-mode-description) #'ellm-toggle-debug-mode)
-                  (cons (ellm--provider-description) #'ellm-set-provider)
-                  (cons (ellm--model-size-description) #'ellm-set-model-size)
-                  (cons (ellm--temperature-description) #'ellm-set-temperature)
-                  (cons (ellm--max-tokens-description) #'ellm-set-max-tokens)
-                  (cons (ellm--system-message-description) #'ellm-set-system-message))))
-    (alist-get
-     (completing-read "Choose a setting to configure: " (mapcar 'car choices))
-     choices nil nil 'equal)))
-
-(defun ellm--system-message-description ()
-  "Return a string describing the current system message."
-  (format "System Message                  %s"
-          (propertize (symbol-name ellm-current-system-message)
-                      'face 'font-lock-string-face)))
-
-(defun ellm--provider-description ()
-  "Return a string describing the current provider."
-  (format "Provider                        %s"
-          (propertize (symbol-name ellm-provider)
-                      'face 'font-lock-type-face)))
-
-(defun ellm--model-size-description ()
-  "Return a string describing the current model size."
-  (format "Model size                      %s"
-          (propertize (symbol-name ellm-model-size)
-                      'face 'font-lock-type-face)))
-
-(defun ellm--temperature-description ()
-  "Return a string describing the current temperature."
-  (format "Temperature                     %s"
-          (propertize (number-to-string ellm-temperature)
-                      'face 'font-lock-number-face)))
-
-(defun ellm--max-tokens-description ()
-  "Return a string describing the current max tokens."
-  (format "Max Tokens                      %s"
-          (propertize (number-to-string ellm-max-tokens)
-                      'face 'font-lock-number-face)))
-
 (defun ellm-toggle-test-mode ()
   "Set LLM parameters to lowest token cost for testing purposes.
 When togling off, restore the previously set values."
@@ -599,16 +569,6 @@ When togling off, restore the previously set values."
         (goto-char (point-min))
         (insert (ellm--conversations-file-header))
         (message "...ellm-test-mode enabled...")))))
-
-(defun ellm--conversations-file-header ()
-  "Concatenate `ellm-org--buffer-props' into a header string."
-  (with-temp-buffer
-    (let ((plist ellm-org--buffer-props))
-      (while plist
-        (let ((prop (substring (symbol-name (car plist)) 1))
-              (value (cadr plist)))
-          (insert (format "#+%s: %s\n" prop value)))))
-    (buffer-string)))
 
 (defun ellm-toggle-debug-mode ()
   "Toggle debug mode."
@@ -646,6 +606,36 @@ Its value will be a propertized t if `PTRUE' is non-nil, nil otherwise."
 (defun ellm--toggle-debug-mode-description ()
   "Return a string describing the current debug mode setting."
   (ellm--true-false-menu-item "Debug Mode" ellm--debug-mode))
+
+(defun ellm--system-message-description ()
+  "Return a string describing the current system message."
+  (format "System Message                  %s"
+          (propertize (symbol-name ellm-current-system-message)
+                      'face 'font-lock-string-face)))
+
+(defun ellm--provider-description ()
+  "Return a string describing the current provider."
+  (format "Provider                        %s"
+          (propertize (symbol-name ellm-provider)
+                      'face 'font-lock-type-face)))
+
+(defun ellm--model-size-description ()
+  "Return a string describing the current model size."
+  (format "Model size                      %s"
+          (propertize (symbol-name ellm-model-size)
+                      'face 'font-lock-type-face)))
+
+(defun ellm--temperature-description ()
+  "Return a string describing the current temperature."
+  (format "Temperature                     %s"
+          (propertize (number-to-string ellm-temperature)
+                      'face 'font-lock-number-face)))
+
+(defun ellm--max-tokens-description ()
+  "Return a string describing the current max tokens."
+  (format "Max Tokens                      %s"
+          (propertize (number-to-string ellm-max-tokens)
+                      'face 'font-lock-number-face)))
 
 (defun ellm--get-conversation-model (conversation)
   "Get the model used in the `CONVERSATION'."
@@ -1087,6 +1077,16 @@ The `RESPONSE' is expected to be a string."
         (ellm--append-to! (alist-get 'messages conversation)
                           (ellm--make-image-message :assistant (base64-decode-string response) 'data-p))
       (ellm--add-assistant-message conversation content))))
+
+(defun ellm--conversations-file-header ()
+  "Concatenate `ellm-org--buffer-props' into a header string."
+  (with-temp-buffer
+    (let ((plist ellm-org--buffer-props))
+      (while plist
+        (let ((prop (substring (symbol-name (car plist)) 1))
+              (value (cadr plist)))
+          (insert (format "#+%s: %s\n" prop value)))))
+    (buffer-string)))
 
 (defun ellm--insert-conversation-into-org (conversations-buffer conversation)
   "Insert the `CONVERSATION' into the org file at `CONVERSATIONS-BUFFER'."
