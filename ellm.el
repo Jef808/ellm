@@ -235,7 +235,7 @@ Avoid unnecessary politeness details and focus on accuracy and relevance.")
     (code-refactoring :type function
                       :args (:language)
                       :value (lambda (language)
-                               (format "You are an expert %s programmer integrated with Emacs.
+                               (format "You are an expert %s programmer.
 Your primary task is to assist with improving and optimizing existing code.
 Identify inefficient or outdated code patterns and suggest better alternatives.
 Ensure that the refactored code remains functionally equivalent to the original.
@@ -245,7 +245,7 @@ Provide clear, concise code samples highlighting the changes."
     (code-review :type function
                  :args (:language)
                  :value (lambda (language)
-                          (format "You are an expert %s programmer integrated with Emacs.
+                          (format "You are an expert %s programmer.
 Your primary task is to assist with reviewing code, identifying potential issues, and suggesting improvements.
 Focus on code logic, best practices, performance, and readability.
 Provide constructive feedback, indicating both strengths and areas for improvement.
@@ -256,14 +256,16 @@ Avoid unnecessary politeness and organizational sections like a closing summary.
     (code-generation :type function
                      :args (:language)
                      :value (lambda (language)
-                              (format "You are an expert %s programmer integrated with Emacs.
+                              (format "You are an expert %s programmer.
 Your primary task is to assist with code generation, ensuring accuracy and efficiency.
 When generating code, use the provided CONTEXT to tailor your responses to the user's needs.
 Provide well-commented, clean, and efficient code samples.
-If the problem can be solved in multiple ways, briefly state the options and recommend the most efficient one.
-3When you encounter incomplete or ambiguous instructions, seek clarifications from the user.
+If the problem can be solved in multiple ways, briefly state the options and make a recommendation for which one to use.
+When you encounter incomplete or ambiguous instructions, seek clarifications from the user.
 Maintain a focus on technical precision and completeness without redundant explanations or politeness."
                                       language)))
+    (latex-expert :type string
+                  :value "You are an expert in LaTeX.")
     (prompt-generator :type string
                       :value "I want you to act as a prompt generator.
 Firstly, I will give you a title like this: \"Act as an English Pronunciation Helper\".
@@ -689,8 +691,8 @@ a list with a `model' key. (e.g. a conversation)."
     (emacs-lisp-mode . "emacs-lisp")
     (org-mode . "org")
     (lua-mode . "lua")
-    (c-or-c++-mode . "cpp")
-    (c-or-c++-ts-mode . "cpp")
+    (c++-mode . "cpp")
+    (c++-ts-mode . "cpp")
     (rjsx-mode . "typescript")
     (sh-mode . "shell"))
   "Alist mapping major modes to Org mode source block languages.")
@@ -1133,7 +1135,8 @@ The `RESPONSE' is expected to be a string."
     (insert-image (create-image data nil 'data-p :width 400))))
 
 (defun ellm--insert-heading-and-metadata (title id model temperature)
-  "Insert an Org heading with properties `TITLE', `ID', `MODEL', and `TEMPERATURE'."
+  "Insert an Org heading with properties.
+The required properties are TITLE, ID, MODEL and TEMPERATURE."
   (org-insert-heading)
   (insert title "  ")
   (org-insert-time-stamp nil t t)
