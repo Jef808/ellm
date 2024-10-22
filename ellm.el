@@ -815,10 +815,63 @@ If `DATA-P' is non-nil, the `IMAGE-SOURCE' is treated as a base64 encoded image.
                   (base64-encode-region (point-min) (point-max))
                   (buffer-string)))
       `((role . ,role)
-      (content . ((type . "image")
-                  (source . ((type . "base64")
-                             (media_type . ,message-media-type)
-                             (data . ,image-data))))))))))
+        (content . ((type . "image")
+                    (source . ((type . "base64")
+                               (media_type . ,message-media-type)
+                               (data . ,image-data))))))))))
+
+(defvar ellm--last-screenshot-counter 0
+  "Counter for the screenshot filenames.")
+
+(defvar ellm--screenshot-process nil
+  "Scrot process handle for taking screenshots.")
+
+(defun ellm--screenshot-process-done (process event path)
+  "Called when \"scrot\" process exits.
+PROCESS and EVENT are same arguments as in `set-process-sentinel'.
+PATH is the path to the file at which the screenshot is saved."
+    (setq ellm--screenshot-process nil)
+    (with-current-buffer (process-buffer process)
+      (if (not (equal event "finished\n"))
+          (progn
+            (insert event)
+            (cond ((save-excursion
+                     (goto-char (point-min))
+                     (re-search-forward "Key was pressed" nil t))
+                   (ding)
+                   (message "Key was pressed, screenshot aborted"))
+                  (t
+                   (display-buffer (process-buffer process))
+                   (message "Error running \"scrot\" program")
+                   (ding))))
+        (with-current-buffer (get-buffer ellm--context-buffer-name)
+          (let ((link (format "[[file:%s]]" path))
+                (inhibit-read-only t)
+                (beg (point)))
+            (insert link)
+            (org-display-inline-images nil t beg (point)))))))
+
+(defun ellm-take-screenshot ()
+  "Take a screenshot."
+  (interactive)
+  (let* ((dir "/tmp")
+         (filename (format "screenshot-%s.%s" ellm--last-screenshot-counter "png"))
+         (path (expand-file-name filename dir)))
+    (cl-incf ellm--last-screenshot-counter)
+    (when (get-buffer "*scrot*")
+      (with-current-buffer (get-buffer "*scrot*")
+        (erase-buffer)))
+    (setq ellm--screenshot-process
+          (or
+           (start-process "scrot" "*scrot*" "scrot" "-s" path)
+           (error "Unable to start scrot process")))
+    (when ellm--screenshot-process
+      (message "Click on a window, or select a rectangle...")
+      (set-process-sentinel
+       ellm--screenshot-process
+       `(lambda (process event)
+          (ellm--screenshot-process-done
+           process event ,path))))))
 
 (defun ellm--add-system-message (content conversation)
   "Add a system message with `CONTENT' to the `CONVERSATION'.
