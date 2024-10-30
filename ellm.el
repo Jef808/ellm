@@ -1359,6 +1359,7 @@ The returned object is an org parse tree."
     (push (cons 'title effective-title) conversation)
     (push (cons 'messages messages) conversation)
     (push (cons 'system (ellm--get-system-message)) conversation)
+    (push (cons 'system-alias ellm-current-system-message) conversation)
     conversation))
 
 (defun ellm-org--get-conversation-metadata (properties)
