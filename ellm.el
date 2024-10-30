@@ -116,9 +116,9 @@
   :type 'alist
   :group 'ellm)
 
-(defcustom ellm--anthropic-models-alist `((big . "claude-3-5-sonnet-20240620")
+(defcustom ellm--anthropic-models-alist `((big . "claude-3-5-sonnet-20241022")
                                           (medium . "claude-3-5-sonnet-20240620")
-                                          (small . "claude-3-haiku-20240307"))
+                                          (small . "claude-3-haiku-"))
   "Alist mapping model sizes to OpenAI model names."
   :type 'alist
   :group 'ellm)
@@ -144,7 +144,7 @@
                    (medium . "gpt-3.5-turbo")
                    (small . "gpt-3.5-turbo")
                    (image . "dall-e-3")))
-   (cons 'anthropic `((big . "claude-3-5-sonnet-20240620")
+   (cons 'anthropic `((big . "claude-3-5-sonnet-20241022")
                       (medium . "claude-3-5-sonnet-20240620")
                       (small . "claude-3-haiku-20240307")))
    (cons 'groq `((big . "llama3-70b-8192")
@@ -158,7 +158,7 @@
 (defcustom ellm-model-alist `(("gpt-4o" . (:provider openai :size big))
                               ("gpt-3.5-turbo" . (:provider openai :size small))
                               ("dall-e-3" . (:provider openai :size image))
-                              ("claude-3-5-sonnet-20240620" . (:provider anthropic :size big))
+                              ("claude-3-5-sonnet-20241022" . (:provider anthropic :size big))
                               ("claude-3-5-sonnet-20240620" . (:provider anthropic :size medium))
                               ("claude-3-haiku-20240307" . (:provider anthropic :size small))
                               ("llama3-70b-8192" . (:provider groq :size big))
@@ -693,7 +693,8 @@ a list with a `model' key. (e.g. a conversation)."
     (lua-mode . "lua")
     (c++-mode . "cpp")
     (c++-ts-mode . "cpp")
-    (rjsx-mode . "typescript")
+    (rjsx-mode . "typescript-tsx")
+    (tsx-mode . "typescript-tsx")
     (sh-mode . "shell"))
   "Alist mapping major modes to Org mode source block languages.")
 
