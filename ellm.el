@@ -909,6 +909,7 @@ Return the conversation-data alist."
            (cons 'temperature ellm-temperature)
            (cons 'max_tokens ellm-max-tokens)
            (cons 'model ellm-model)
+           (cons 'system-alias ellm-current-system-message)
            (cons 'title nil)
            (cons 'system (apply #'ellm--get-system-message system-message-args)))))
     (ellm--add-user-message conversation prompt)
@@ -967,7 +968,8 @@ Also remove the TITLE and ID entries."
       (ellm--add-system-message system-directive conversation-copy))
     (setf (alist-get 'system conversation-copy nil 'remove) nil
           (alist-get 'title conversation-copy nil 'remove) nil
-          (alist-get 'id conversation-copy nil 'remove) nil)
+          (alist-get 'id conversation-copy nil 'remove) nil
+          (alist-get 'system-alias conversation-copy nil 'remove) nil)
     (when (eq ellm-model-size 'image)
       (let* ((messages (alist-get 'messages conversation))
              (prompt
@@ -989,6 +991,7 @@ Also remove the TITLE and ID entries."
         (system-directives (alist-get 'system conversation)))
     (setf (alist-get 'title conversation-copy nil 'remove) nil
           (alist-get 'id conversation-copy nil 'remove) nil
+          (alist-get 'system-alias conversation-copy nil 'remove) nil
           (alist-get 'system conversation-copy nil 'remove) system-directives)
     conversation-copy))
 
@@ -1154,6 +1157,7 @@ The `RESPONSE' is expected to be a string."
          (model (alist-get 'model conversation))
          (temperature (alist-get 'temperature conversation))
          (id (alist-get 'id conversation))
+         (system-alias (alist-get 'system-alias conversation))
          (stringified-previous-messages (ellm--messages-to-string previous-messages "**"))
          (org-formatted-new-messages (ellm--convert-messages-to-org new-messages))
          (messages-to-insert (concat stringified-previous-messages
@@ -1167,7 +1171,7 @@ The `RESPONSE' is expected to be a string."
                    (org-cut-subtree))
           (setq id (or id (org-id-new))))
         (goto-char (point-min))
-        (ellm--insert-heading-and-metadata title id model temperature)
+        (ellm--insert-heading-and-metadata title id model temperature system-alias)
         (insert messages-to-insert)
         (when ellm-save-conversations
           (save-buffer)))
@@ -1188,16 +1192,18 @@ The `RESPONSE' is expected to be a string."
          (data (alist-get 'data source)))
     (insert-image (create-image data nil 'data-p :width 400))))
 
-(defun ellm--insert-heading-and-metadata (title id model temperature)
+(defun ellm--insert-heading-and-metadata (title id model temperature system-alias)
   "Insert an Org heading with properties.
-The required properties are TITLE, ID, MODEL and TEMPERATURE."
+The required properties are TITLE, ID, MODEL, TEMPERATURE and SYSTEM-ALIAS."
   (org-insert-heading)
   (insert title "  ")
   (org-insert-time-stamp nil t t)
   (newline)
   (org-set-property "ID" id)
   (org-set-property "MODEL" model)
-  (org-set-property "TEMPERATURE" (number-to-string temperature)))
+  (org-set-property "TEMPERATURE" (number-to-string temperature))
+  (when system-alias
+    (org-set-property "SYSTEM" (symbol-name system-alias))))
 
 (defun ellm--parse-json-response ()
   "Parse the json response from the API call."
