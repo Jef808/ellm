@@ -118,7 +118,7 @@
 
 (defcustom ellm--anthropic-models-alist `((big . "claude-3-5-sonnet-20241022")
                                           (medium . "claude-3-5-sonnet-20240620")
-                                          (small . "claude-3-haiku-"))
+                                          (small . "claude-3-haiku-20241022"))
   "Alist mapping model sizes to OpenAI model names."
   :type 'alist
   :group 'ellm)
@@ -145,8 +145,8 @@
                    (small . "gpt-3.5-turbo")
                    (image . "dall-e-3")))
    (cons 'anthropic `((big . "claude-3-5-sonnet-20241022")
-                      (medium . "claude-3-5-sonnet-20240620")
-                      (small . "claude-3-haiku-20240307")))
+                      (medium . "claude-3-5-sonnet-20241022")
+                      (small . "claude-3-haiku-20241022")))
    (cons 'groq `((big . "llama3-70b-8192")
                  (medium . "llama3-8b-8292")
                  (small . "mixtral-8x7b-32768")))
@@ -159,8 +159,8 @@
                               ("gpt-3.5-turbo" . (:provider openai :size small))
                               ("dall-e-3" . (:provider openai :size image))
                               ("claude-3-5-sonnet-20241022" . (:provider anthropic :size big))
-                              ("claude-3-5-sonnet-20240620" . (:provider anthropic :size medium))
-                              ("claude-3-haiku-20240307" . (:provider anthropic :size small))
+                              ("claude-3-5-sonnet-20241022" . (:provider anthropic :size medium))
+                              ("claude-3-haiku-20241022" . (:provider anthropic :size small))
                               ("llama3-70b-8192" . (:provider groq :size big))
                               ("llama3-8b-8292" . (:provider groq :size medium))
                               ("mixtral-8x7b-32768" . (:provider groq :size small))
@@ -219,12 +219,9 @@ Format your response in markdown."
 Your goal is to execute the user's task or precisely answer their questions, \
 using all the CONTEXT the user provides (if any).
 Ensure your responses are relevant and adequate based on the nature of the query.
-You are very cautious and give thorough justifications for each claim made.
-When not confident about certain details, you say so.
-If needed, request further information or clarifications from the user.
-Avoid unnecessary politeness and organizational sections.
-Instead, focus on providing clear, relevant examples and the technical aspects \
-of the subject at hand.")
+You are very cautious and give thorough justifications for each claim you make.
+Avoid unnecessary politeness and organizational sections,
+focusing instead on clear, relevant examples and the technical aspects of the subject at hand.")
     (question-and-answer :type string
                          :value "You are an expert technical assistant integrated with Emacs.
 Your primary task is to accurately answer the user's technical questions.
@@ -1374,8 +1371,9 @@ The returned object is an org parse tree."
   (let (messages)
     (save-excursion
       (goto-char posn)
-      (unless (ellm-org--at-headline-level-p 1)
-        (error "ellm-org--reconstruct-messages: Point should be at the beginning of a conversation"))
+      (cl-assert
+       (ellm-org--at-headline-level-p 1) nil
+       "ellm-org--get-conversation-messages: Point should be at the beginning of a conversation")
       (org-down-element)
       (unless (ellm-org--at-headline-level-p 2)
         (org-next-visible-heading 1))
@@ -1646,8 +1644,9 @@ This function does not take any arguments and returns nil."
       (progn
         (when (numberp rating)
           (setq rating (number-to-string rating)))
-        (unless (member rating (mapcar 'car ellm-org--faces-alist))
-          (error "Invalid rating. Please enter a value between 1 and 5")))
+        (cl-assert
+         (member rating (mapcar 'car ellm-org--faces-alist)) nil
+         "Invalid rating. Please enter a value between 1 and 5"))
     (setq rating (completing-read "Rate the conversation (1-5): " '(1 2 3 4 5))))
   (save-excursion
     (ellm--goto-conversation-top)
@@ -1967,10 +1966,10 @@ is not found, do nothing."
   "Remove the content of the `OVERLAY' from the context buffer."
   (interactive)
   (when overlay
-    (unless (ellm--overlay-context-overlay-p overlay)
-      (error "Not a valid context overlay: %S" overlay)))
-  (unless (or overlay (setq overlay (ellm--context-at (point))))
-    (error "No context overlay at point: %S" (point)))
+    (cl-assert (ellm--overlay-context-overlay-p overlay) nil
+               "Not a valid context overlay: %S" overlay))
+  (cl-assert (or overlay (setq overlay (ellm--context-at (point)))) nil
+             "No context overlay at point: %S" (point))
   (let* ((context-buffer-ov (ellm--context-buffer-overlay overlay))
          (context-ov (overlay-get context-buffer-ov 'ellm-other-overlay)))
     (ellm--try-delete-context-content context-buffer-ov)
