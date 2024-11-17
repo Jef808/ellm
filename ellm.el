@@ -56,7 +56,10 @@
   "The URL to send requests to the OpenAI API.")
 
 (defconst ellm--anthropic-api-url "https://api.anthropic.com/v1/messages"
-  "The URL to send requests to the OpenAI API.")
+  "The URL to send requests to the Anthropic API.")
+
+(defconst ellm--xai-api-url "https://api.x.ai/v1/chat/completions"
+  "The URL to send requests to the xAI API.")
 
 (defconst ellm--groq-api-url "https://api.groq.com/openai/v1/chat/completions"
   "The URL to send requests to the Groq API.")
@@ -80,6 +83,7 @@
   :type '(choice
           (const :tag "OpenAI" openai)
           (const :tag "Anthropic" anthropic)
+          (const :tag "xAI" xai)
           (const :tag "Groq" groq)
           (const :tag "Mistral" mistral))
   :group 'ellm)
@@ -98,12 +102,12 @@
   :type 'string
   :group 'ellm)
 
-(defcustom ellm-temperature 0.2
+(defcustom ellm-temperature 0.4
   "The temperature to use when making a prompt."
   :type 'float
   :group 'ellm)
 
-(defcustom ellm-max-tokens 1000
+(defcustom ellm-max-tokens 2048
   "The temperature to use when making a prompt."
   :type 'integer
   :group 'ellm)
@@ -119,22 +123,28 @@
 (defcustom ellm--anthropic-models-alist `((big . "claude-3-5-sonnet-20241022")
                                           (medium . "claude-3-5-sonnet-20240620")
                                           (small . "claude-3-haiku-20241022"))
-  "Alist mapping model sizes to OpenAI model names."
+  "Alist mapping model sizes to Anthropic model names."
   :type 'alist
   :group 'ellm)
 
+(defcustom ellm--xai-models-alist `((big . "grok-beta")
+                                    (medium . "grok-beta")
+                                    (small . "grok-beta"))
+  "Alist mapping model sizes to xAI model names."
+  :type 'alist
+  :group 'ellm)
 
 (defcustom ellm--groq-models-alist `((big . "llama3-70b-8192")
                                      (medium . "llama3-8b-8192")
                                      (small . "mixtral-8x7b-32768"))
-  "Alist mapping model sizes to OpenAI model names."
+  "Alist mapping model sizes to Groq model names."
   :type 'alist
   :group 'ellm)
 
 (defcustom ellm--mistral-models-alist `((big . "codestral-latest")
                                         (medium . "mistral-large-latest")
                                         (small . "mistral-small-latest"))
-  "Alist mapping model sizes to OpenAI model names."
+  "Alist mapping model sizes to Mistral model names."
   :type 'alist
   :group 'ellm)
 
@@ -147,6 +157,9 @@
    (cons 'anthropic `((big . "claude-3-5-sonnet-20241022")
                       (medium . "claude-3-5-sonnet-20241022")
                       (small . "claude-3-haiku-20241022")))
+   (cons 'xai `((big . "grok-beta")
+                (medium . "grok-beta")
+                (small . "grok-beta")))
    (cons 'groq `((big . "llama3-70b-8192")
                  (medium . "llama3-8b-8292")
                  (small . "mixtral-8x7b-32768")))
@@ -161,6 +174,9 @@
                               ("claude-3-5-sonnet-20241022" . (:provider anthropic :size big))
                               ("claude-3-5-sonnet-20241022" . (:provider anthropic :size medium))
                               ("claude-3-haiku-20241022" . (:provider anthropic :size small))
+                              ("grok-beta" . (:provider xai :size big))
+                              ("grok-beta" . (:provider xai :size medium))
+                              ("grok-beta" . (:provider xai :size small))
                               ("llama3-70b-8192" . (:provider groq :size big))
                               ("llama3-8b-8292" . (:provider groq :size medium))
                               ("mixtral-8x7b-32768" . (:provider groq :size small))
@@ -170,6 +186,29 @@
   "Alist mapping model names to their providers."
   :type 'alist
   :group 'ellm)
+
+(defvar ellm-provider-configurations
+  `((openai . ((prepare-request-headers . ellm--prepare-request-headers-default)
+               (prepare-request-body . ellm--prepare-request-body-default)
+               (parse-response . ellm--parse-response-openai)
+               (models-alist . ,ellm--openai-models-alist)))
+    (anthropic . ((prepare-request-headers . ellm--prepare-request-headers-anthropic)
+                  (prepare-request-body . ellm--prepare-request-body-anthropic)
+                  (parse-response . ellm--parse-response-anthropic)
+                  (models-alist . ,ellm--anthropic-models-alist)))
+    (xai . ((prepare-request-headers . ellm--prepare-request-headers-default)
+            (prepare-request-body . ellm--prepare-request-body-default)
+            (parse-response . ellm--parse-response-openai)
+            (models-alist . ,ellm--xai-models-alist)))
+    (groq . ((prepare-request-headers . ellm--prepare-request-headers-default)
+             (prepare-request-body . ellm--prepare-request-body-default)
+             (parse-response . ellm--parse-response-openai)
+             (models-alist . ,ellm--groq-models-alist)))
+    (mistral . ((prepare-request-headers . ellm--prepare-request-headers-default)
+                (prepare-request-body . ellm--prepare-request-body-default)
+                (parse-response . ellm--parse-response-openai)
+                (models-alist . ,ellm--mistral-models-alist))))
+  "Alist mapping providers to their API configurations.")
 
 (defun ellm-providers-supported ()
   "List of supported providers."
@@ -343,25 +382,6 @@ See `ellm--add-context-from-region' for usage details.")
 
 (defconst ellm--context-buffer-name "*ellm-context*"
   "The name of the buffer used to display the context chunks.")
-
-(defvar ellm-provider-configurations
-  `((openai . ((prepare-request-headers . ellm--prepare-request-headers-default)
-               (prepare-request-body . ellm--prepare-request-body-default)
-               (parse-response . ellm--parse-response-openai)
-               (models-alist . ,ellm--openai-models-alist)))
-    (anthropic . ((prepare-request-headers . ellm--prepare-request-headers-anthropic)
-                  (prepare-request-body . ellm--prepare-request-body-anthropic)
-                  (parse-response . ellm--parse-response-anthropic)
-                  (models-alist . ,ellm--anthropic-models-alist)))
-    (groq . ((prepare-request-headers . ellm--prepare-request-headers-default)
-             (prepare-request-body . ellm--prepare-request-body-default)
-             (parse-response . ellm--parse-response-openai)
-             (models-alist . ,ellm--groq-models-alist)))
-    (mistral . ((prepare-request-headers . ellm--prepare-request-headers-default)
-                (prepare-request-body . ellm--prepare-request-body-default)
-                (parse-response . ellm--parse-response-openai)
-                (models-alist . ,ellm--mistral-models-alist))))
-  "Alist mapping providers to their API configurations.")
 
 (defun ellm-api-key-from-env (provider)
   "Get the API key from the environment for the `PROVIDER'."
@@ -958,15 +978,16 @@ compatible with `json-serialize'."
   "Prepare the messages list with a new user message based on `CONVERSATION'.
 The SYSTEM entry, if non-nil, is removed and made into a system message intead.
 Also remove the TITLE and ID entries."
-  (let ((conversation-copy (copy-alist conversation)))
-    (when-let ((system-directive (alist-get 'system conversation))
-               (messages-copy (cl-copy-list (alist-get 'messages conversation))))
-      (setf (alist-get 'messages conversation-copy) messages-copy)
-      (ellm--add-system-message system-directive conversation-copy))
-    (setf (alist-get 'system conversation-copy nil 'remove) nil
-          (alist-get 'title conversation-copy nil 'remove) nil
+  (let ((conversation-copy (copy-alist conversation))
+        (system-directives (alist-get 'system conversation)))
+    (setf (alist-get 'title conversation-copy nil 'remove) nil
           (alist-get 'id conversation-copy nil 'remove) nil
-          (alist-get 'system-alias conversation-copy nil 'remove) nil)
+          (alist-get 'system-alias conversation-copy nil 'remove) nil
+          (alist-get 'system conversation-copy nil 'remove) nil)
+    (when system-directives
+      (let ((messages-copy (cl-copy-list (alist-get 'messages conversation))))
+        (setf (alist-get 'messages conversation-copy) messages-copy)
+        (ellm--add-system-message system-directives conversation-copy)))
     (when (eq ellm-model-size 'image)
       (let* ((messages (alist-get 'messages conversation))
              (prompt
@@ -974,7 +995,6 @@ Also remove the TITLE and ID entries."
         (setq conversation-copy
               `((model . ,(ellm--get-conversation-model conversation))
                 (prompt . ,prompt)
-                ;; (response_format . "b64_json")
                 (quality . "hq")
                 (style . "vivid")  ; "natural"
               ))))
