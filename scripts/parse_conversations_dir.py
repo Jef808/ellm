@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import re
 import sys
 import json
@@ -26,6 +24,8 @@ def parse_properties(property_drawer):
         key, value = SPACES_PATTERN.split(line, maxsplit=2)
         key = key[1:-1].lower().strip()
         properties[key] = value.strip()
+        if key == "temperature":
+            properties[key] = float(properties[key])
 
     return properties
 
@@ -129,10 +129,15 @@ def glob_conversations_files(ellm_conversations_dir):
 if __name__ == "__main__":
     ellm_conversations_directory = sys.argv[1]
 
+    output_directory = sys.argv[2]
+
     ellm_conversations_files = glob_conversations_files(ellm_conversations_directory)
 
     conversations = []
     for file in ellm_conversations_files:
         conversations.extend(parse_conversations_file(file))
+
+    with open(f"{output_directory}/ellm.json", "w+") as f:
+        json.dump(conversations, f, default=str)
 
     print(json.dumps(conversations, indent=2, default=str))
