@@ -1040,7 +1040,7 @@ called with a non-nil MAYBE-PROMPT argument.
 If `FORCE-PROMPT' is non-nil, instead prompt the user for which
 project to target."
   (interactive)
-  (let* ((maybe-prompt (called-interactively-p 'interactive))
+  (let* ((maybe-prompt (and (project-current) (called-interactively-p 'interactive)))
          (filename-suffix
           (if-let ((current (project-current maybe-prompt)))
               (project-name current)
