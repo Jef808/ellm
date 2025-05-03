@@ -1161,7 +1161,8 @@ The `RESPONSE' is expected to be a string."
       (while plist
         (let ((prop (substring (symbol-name (car plist)) 1))
               (value (cadr plist)))
-          (insert (format "#+%s: %s\n" prop value)))))
+          (insert (format "#+%s: %s\n" prop value))
+          (setq plist (cddr plist)))))
     (buffer-string)))
 
 (defun ellm--insert-conversation-into-org (conversations-buffer conversation)
@@ -1183,6 +1184,9 @@ The `RESPONSE' is expected to be a string."
     (ellm--log messages-to-insert "MESSAGES-TO-INSERT")
     (with-current-buffer conversations-buffer
       (let ((inhibit-read-only t))
+        (when (= (point-min) (point-max))
+          (goto-char (point-min))
+          (insert (ellm--conversations-file-header)))
         (if-let ((pos (and ellm-save-conversations (org-id-find id 'marker))))
             (progn (goto-char pos)
                    (org-cut-subtree))
