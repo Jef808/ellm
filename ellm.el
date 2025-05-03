@@ -1513,24 +1513,25 @@ is temporarily highlighted to indicate they are new messages."
     (ellm-org--apply-rating-face)
     (read-only-mode 1)
     (org-overview)
-    (ellm--goto-first-top-level-heading)
-    (org-fold-show-subtree)
-    (if-let* ((headlines
-               (org-element-map (ellm--conversation-subtree) 'headline 'identity))
-              (last-assistant-message
-               (cl-find-if
-                (lambda (hl) (string-match-p "Assistant" (org-element-property :raw-value hl)))
-                headlines :from-end t))
-              (last-assistant-message-begin
-               (org-element-property :begin last-assistant-message)))
-        (with-selected-window (get-buffer-window (current-buffer))
-          (goto-char last-assistant-message-begin)
-          (recenter-top-bottom 4)
-          (when highlight-last-message
-            (save-excursion
-              (org-end-of-subtree)
-              (pulse-momentary-highlight-region last-assistant-message-begin (point)))))
-      (message "Last user message not found"))))
+    (unless (= (point-min) (point-max))
+      (ellm--goto-first-top-level-heading)
+      (org-fold-show-subtree)
+      (if-let* ((headlines
+                 (org-element-map (ellm--conversation-subtree) 'headline 'identity))
+                (last-assistant-message
+                 (cl-find-if
+                  (lambda (hl) (string-match-p "Assistant" (org-element-property :raw-value hl)))
+                  headlines :from-end t))
+                (last-assistant-message-begin
+                 (org-element-property :begin last-assistant-message)))
+          (with-selected-window (get-buffer-window (current-buffer))
+            (goto-char last-assistant-message-begin)
+            (recenter-top-bottom 4)
+            (when highlight-last-message
+              (save-excursion
+                (org-end-of-subtree)
+                (pulse-momentary-highlight-region last-assistant-message-begin (point)))))
+        (message "Last user message not found")))))
 
 (defun ellm-show-conversations-buffer ()
   "Show the relevant conversations file.
