@@ -120,8 +120,8 @@
   :type 'alist
   :group 'ellm)
 
-(defcustom ellm--anthropic-models-alist `((big . "claude-3-7-sonnet-20250219")
-                                          (medium . "claude-3-5-sonnet-20241022")
+(defcustom ellm--anthropic-models-alist `((big . "claude-sonnet-4-20250514")
+                                          (medium . "claude-3-7-sonnet-20250219")
                                           (small . "claude-3-5-haiku-20241022"))
   "Alist mapping model sizes to Anthropic model names."
   :type 'alist
@@ -154,8 +154,8 @@
                    (medium . "gpt-3.5-turbo")
                    (small . "gpt-3.5-turbo")
                    (image . "dall-e-3")))
-   (cons 'anthropic `((big . "claude-3-7-sonnet-20250219")
-                      (medium . "claude-3-5-sonnet-20241022")
+   (cons 'anthropic `((big . "claude-sonnet-4-20250514")
+                      (medium . "claude-3-7-sonnet-20250219")
                       (small . "claude-3-5-haiku-20241022")))
    (cons 'xai `((big . "grok-beta")
                 (medium . "grok-beta")
@@ -171,8 +171,8 @@
 (defcustom ellm-model-alist `(("gpt-4o" . (:provider openai :size big))
                               ("gpt-3.5-turbo" . (:provider openai :size small))
                               ("dall-e-3" . (:provider openai :size image))
-                              ("claude-3-7-sonnet-20250219" . (:provider anthropic :size big))
-                              ("claude-3-5-sonnet-20241022" . (:provider anthropic :size medium))
+                              ("claude-sonnet-4-20250514" . (:provider anthropic :size big))
+                              ("claude-3-7-sonnet-20250219" . (:provider anthropic :size medium))
                               ("claude-3-5-haiku-20241022" . (:provider anthropic :size small))
                               ("grok-beta" . (:provider xai :size big))
                               ("grok-beta" . (:provider xai :size medium))
