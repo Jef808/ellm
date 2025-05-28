@@ -67,6 +67,9 @@
 (defconst ellm--mistral-api-url "https://codestral.mistral.ai/v1/chat/completions"
   "The URL to send requests to the Mistral API.")
 
+(defconst ellm--perplexity-api-url "https://api.perplexity.ai/chat/completions"
+  "The URL to send requests to the Perplexity API.")
+
 (defcustom ellm--conversations-dir
   (directory-file-name (expand-file-name ".ellm/" "~/"))
   "The directory to store conversation history."
@@ -85,7 +88,8 @@
           (const :tag "Anthropic" anthropic)
           (const :tag "xAI" xai)
           (const :tag "Groq" groq)
-          (const :tag "Mistral" mistral))
+          (const :tag "Mistral" mistral)
+          (const :tag "Perplexity" perplexity))
   :group 'ellm)
 
 (defcustom ellm-model-size 'big
@@ -148,6 +152,13 @@
   :type 'alist
   :group 'ellm)
 
+(defcustom ellm--perplexity-models-alist `((big . "sonar-pro")
+                                           (medium . "sonar")
+                                           (small . "sonar"))
+  "Alist mapping model sizes to Perplexity model names."
+  :type 'alist
+  :group 'ellm)
+
 (defvar ellm--models-alist
   (list
    (cons 'openai `((big . "gpt-4o")
@@ -165,7 +176,10 @@
                  (small . "mixtral-8x7b-32768")))
    (cons 'mistral `((big . "codestral-latest")
                     (medium . "mistral-large-latest")
-                    (small . "mistral-small-latest"))))
+                    (small . "mistral-small-latest")))
+   (cons 'perplexity `((big . "sonar-pro")
+                       (medium . "sonar")
+                       (small . "sonar"))))
   "Alist mapping providers to their models.")
 
 (defcustom ellm-model-alist `(("gpt-4o" . (:provider openai :size big))
@@ -182,7 +196,10 @@
                               ("mixtral-8x7b-32768" . (:provider groq :size small))
                               ("codestral-latest" . (:provider mistral :size big))
                               ("mistral-large-latest" . (:provider mistral :size medium))
-                              ("mistral-small-latest" . (:provider mistral :size small)))
+                              ("mistral-small-latest" . (:provider mistral :size small))
+                              ("sonar-pro" . (:provider perplexity :size big))
+                              ("sonar" . (:provider perplexity :size medium))
+                              ("sonar" . (:provider perplexity :size small)))
   "Alist mapping model names to their providers."
   :type 'alist
   :group 'ellm)
@@ -207,7 +224,11 @@
     (mistral . ((prepare-request-headers . ellm--prepare-request-headers-default)
                 (prepare-request-body . ellm--prepare-request-body-default)
                 (parse-response . ellm--parse-response-openai)
-                (models-alist . ,ellm--mistral-models-alist))))
+                (models-alist . ,ellm--mistral-models-alist)))
+    (perplexity . ((prepare-request-headers . ellm--prepare-request-headers-default)
+                   (prepare-request-body . ellm--prepare-request-body-default)
+                   (parse-response . ellm--parse-response-openai)
+                   (models-alist . ,ellm--perplexity-models-alist))))
   "Alist mapping providers to their API configurations.")
 
 (defun ellm-providers-supported ()
@@ -253,7 +274,9 @@ Format your response in markdown."
   "The system message suffix to append to the system message.")
 
 (defcustom ellm-system-messages
-  `((default :type string
+  `((none :type string
+     :value nil)
+    (default :type string
      :value "You are a useful general assistant integrated with Emacs.
 Your goal is to execute the user's task or precisely answer their questions, \
 using all the CONTEXT the user provides (if any).
@@ -520,7 +543,8 @@ system message function, if there are any."
       (unless (setq ms (ellm--validation-model-size model-size))
         (error (funcall make-error-message model-size))))
     (let ((model (ellm--get-model ellm-provider ms)))
-      (ellm--set-model model)))
+      (ellm--set-model model)
+      (setq ellm-model-size ms)))
   (message "...model set to %s..." ellm-model))
 
 (defun ellm--validation-max-tokens (max-tokens)
