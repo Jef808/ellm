@@ -262,7 +262,7 @@
     ("1" '(:foreground "OrangeRed")))
   "Faces indicating the user ratings of conversations.")
 
-(defvar ellm--system-message-suffix "\nFinally, you accompany any response with a short title \
+(defvar ellm--system-message-suffix "you accompany any response with a short title \
 which describes the discussion.
 You separate the title and the response by a markdown horizontal \
 rule (i.e. a line consisting of three or more dashes).
@@ -450,8 +450,12 @@ system message function, if there are any."
                     (arg-keys (plist-get message-entry :args)))
                 (apply func (mapcar (lambda (key) (plist-get args key)) arg-keys))))
              ((eq message-type 'string)
-              (plist-get message-entry :value)))))
-      (concat effective-system-message ellm--system-message-suffix))))
+              (plist-get message-entry :value))))
+           (effective-system-message-suffix
+            (concat
+             (unless (eq ellm-current-system-message 'none) "\nFinally, ")
+             ellm--system-message-suffix)))
+      (concat effective-system-message effective-system-message-suffix))))
 
 (defun ellm--get-provider-configuration (provider)
   "Get the configuration for the `PROVIDER'."
