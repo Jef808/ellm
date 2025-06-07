@@ -391,9 +391,6 @@ See `ellm--add-context-from-region' for usage details.")
     :OPTIONS toc:nil)
   "Properties to set for conversations buffers.")
 
-(defvar ellm-auto-export nil
-  "If non-nil, the chat is automatically exported when the response is received.")
-
 (defconst ellm--log-buffer-name "*ellm-logs*"
   "Log buffer for LLM messages.")
 
@@ -621,12 +618,6 @@ When togling off, restore the previously set values."
   (interactive)
   (setq ellm--debug-mode (not ellm--debug-mode))
   (message "...debug mode %s..." (if ellm--debug-mode "enabled" "disabled")))
-
-(defun ellm-toggle-auto-export ()
-  "Toggle automatic exports of responses."
-  (interactive)
-  (setq ellm-auto-export (not ellm-auto-export))
-  (message "...debug mode %s..." (if ellm-auto-export "enabled" "disabled")))
 
 (defun ellm--true-false-menu-item (item-title ptrue)
   "Return a menu description for `ITEM-TITLE' with a true/false value.
@@ -1215,9 +1206,7 @@ The `RESPONSE' is expected to be a string."
         (insert messages-to-insert)
         (when ellm-save-conversations
           (save-buffer)))
-      (ellm--display-conversations-buffer conversations-buffer 'highlight-last-message)
-      (when ellm-auto-export
-        (ellm-export-conversation)))))
+      (ellm--display-conversations-buffer conversations-buffer 'highlight-last-message))))
 
 (defun ellm--image-message-p (message)
   "Check if the `MESSAGE' is an image message."
@@ -1509,7 +1498,6 @@ Optionally, the content of that message can be passed as the `PROMPT' argument."
 The context of the next (or first) user message is passed
 as the `SELECTION' argument. Optionally, the `ID' of a previous
 conversation can be specified to continue that conversation."
-  (setq ellm-auto-export t)
   (when selection
     (with-temp-buffer
       (goto-char (point-min))
