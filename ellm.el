@@ -7,7 +7,7 @@
 ;; Created: March 25, 2024
 ;; Modified: August 02, 2024
 ;; Version: 1.0.0
-;; Keywords: comm convenience data docs extensions faces files help hypermedia languages local matching multimedia outlines tools
+;; Keywords: convenience extensions lisp local hypermedia matching outlines tools
 ;; Homepage: https://github.com/Jef808/ellm
 ;; Package-Requires: ((emacs "29.1"))
 ;;
@@ -15,7 +15,7 @@
 ;;
 ;;; Commentary:
 ;;
-;;  Description
+;;  This package provides a simple interface to interact with LLMs within your workflow.
 ;;
 ;;; Code:
 
@@ -338,7 +338,9 @@ markdown. Include a simple diagram using ASCII art if possible. Do not
 implement any code; focus solely on the architectural design."))
   "Alist mapping system message names to their content.
 The content of those messages are the system messages that will be used as
-instructions for the language models in new conversations."
+instructions for the language models in new conversations.
+Allowing for string templates is useful e.g. for automatically setting the
+language of code generation system messages."
   :safe #'always
   :type '(alist :key-type symbol
                 :value-type (choice
@@ -666,8 +668,8 @@ a list with a `model' key. (e.g. a conversation)."
     (lua-mode . "lua")
     (c++-mode . "cpp")
     (c++-ts-mode . "cpp")
-    (rjsx-mode . "typescript-tsx")
-    (tsx-mode . "typescript-tsx")
+    (rjsx-mode . "typescript")
+    (tsx-mode . "typescript")
     (sh-mode . "shell"))
   "Alist mapping major modes to Org mode source block languages.")
 
