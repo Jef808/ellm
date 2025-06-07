@@ -87,8 +87,7 @@
   :type '(choice
           (const :tag "Big" big)
           (const :tag "Medium" medium)
-          (const :tag "Small" small)
-          (const :tag "Image" image))
+          (const :tag "Small" small))
   :group 'ellm)
 
 (defcustom ellm-model "gpt-4o"
@@ -108,8 +107,7 @@
 
 (defcustom ellm--openai-models-alist `((big . "gpt-4o")
                                        (medium . "gpt-3.5-turbo")
-                                       (small . "gpt-3.5-turbo")
-                                       (image . "dall-e-3"))
+                                       (small . "gpt-3.5-turbo"))
   "Alist mapping model sizes to OpenAI model names."
   :type 'alist
   :group 'ellm)
@@ -153,8 +151,7 @@
   (list
    (cons 'openai `((big . "gpt-4o")
                    (medium . "gpt-3.5-turbo")
-                   (small . "gpt-3.5-turbo")
-                   (image . "dall-e-3")))
+                   (small . "gpt-3.5-turbo")))
    (cons 'anthropic `((big . "claude-sonnet-4-20250514")
                       (medium . "claude-3-7-sonnet-20250219")
                       (small . "claude-3-5-haiku-20241022")))
@@ -174,7 +171,6 @@
 
 (defcustom ellm-model-alist `(("gpt-4o" . (:provider openai :size big))
                               ("gpt-3.5-turbo" . (:provider openai :size small))
-                              ("dall-e-3" . (:provider openai :size image))
                               ("claude-sonnet-4-20250514" . (:provider anthropic :size big))
                               ("claude-3-7-sonnet-20250219" . (:provider anthropic :size medium))
                               ("claude-3-5-haiku-20241022" . (:provider anthropic :size small))
@@ -521,7 +517,7 @@ system message function, if there are any."
                                     (mapcar #'(lambda (item)
                                                 (format
                                                  (propertize (symbol-name item) 'face 'font-lock-type-face)))
-                                            '(big medium small image))))
+                                            '(big medium small))))
                 prompt-message (funcall make-error-message model-size)))
       (unless (setq ms (ellm--validation-model-size model-size))
         (error (funcall make-error-message model-size))))
@@ -675,12 +671,6 @@ The `ARG' can be either a string (the model name) or
 a list with a `model' key. (e.g. a conversation)."
   (plist-get (ellm--get-model-properties arg) :provider))
 
-(defun ellm--get-model-size (arg)
-  "Get the model-size of the model passed in `ARG'.
-The `ARG' can be either a string (the model name) or
-a list with a `model' key. (e.g. a conversation)."
-  (plist-get (ellm--get-model-properties arg) :size))
-
 (defun ellm--set-model (model)
   "Set the `MODEL' to use for the LLM prompt."
   (let ((model-properties (ellm--get-model-properties model)))
@@ -711,58 +701,15 @@ Similar to `push', but for the end of the list."
              (nconc ,place (list ,element))
            (list ,element))))
 
-(defun ellm--make-message (role content &optional image-p)
-  "Create a message with the given `ROLE' and `CONTENT'.
-Pass a non-nil `IMAGE-P' to indicate that `CONTENT' refers
-to an image.
-For image messages, the `IMAGE-P' flag indicates how to
-treat the `CONTENT' string:
-following special values for `IMAGE-P':
-  - \=image-url\=  : Treat `CONTENT' as a url
-  - \=image-path\= : Treat `CONTENT' as a filepath
-  - \=image-data\= : Treat `CONTENT' as base64 encoded bytes."
+(defun ellm--make-message (role content)
+  "Create a message with the given `ROLE' and `CONTENT'."
   (unless (and
            (memq role '(:user :assistant :system))
-           (memq image-p '('image-url 'image-path 'image-data nil))
            (stringp content))
-    (error "Invalid message role, content or image-p: %S %S %S" role content image-p))
-  (let* ((type (if image-p 'image 'text))
-         (data (if image-p (ellm--encode-image content image-p) content)))
+    (error "Invalid message role or content: %S %S" role content))
+  (let* ((type 'text)
+         (data content))
     `((role . ,role) (content . (,`((type . ,type) (,type . ,data)))))))
-
-(defun ellm--encode-image (image flag)
-  "Encode the `IMAGE' based on the `FLAG'.
-The `FLAG' is as `IMAGE-P' in `ellm--make-message' (which see)."
-  (cond
-   ((eq flag 'image-url)
-    (ellm--make-image-message :user image))
-   ((eq flag 'image-path)
-    (ellm--make-image-message :user image))
-   ((eq flag 'image-data)
-    (ellm--make-image-message :user image t))))
-
-(defun ellm--make-image-message (role image-source &optional data-p)
-  "Create an image message with the given `ROLE' and `IMAGE-SOURCE'.
-The `IMAGE-SOURCE' should be a path to an image file or a string containing
-the base64 encoded data of the image.
-If `DATA-P' is non-nil, the `IMAGE-SOURCE' is treated as a base64 encoded image."
-  (let (message-media-type
-        image-data)
-    (unless data-p
-      (let ((file-extension (file-name-extension image-source)))
-        (setq message-media-type (cond ((member file-extension '("jpg" "jpeg")) "image/jpeg")
-                                       ((string= file-extension "png") "image/png")
-                                       (t (error "Unsupported image format: %s" file-extension)))
-              image-data
-                (with-temp-buffer
-                  (insert-file-contents-literally image-source)
-                  (base64-encode-region (point-min) (point-max))
-                  (buffer-string)))
-      `((role . ,role)
-        (content . ((type . "image")
-                    (source . ((type . "base64")
-                               (media_type . ,message-media-type)
-                               (data . ,image-data))))))))))
 
 (defun ellm--add-system-message (content conversation)
   "Add a system message with `CONTENT' to the `CONVERSATION'.
@@ -833,10 +780,9 @@ The `ellm-api-key' function is used to retrieve the api key."
          (mapcar
           (lambda (part)
             (let ((type (alist-get 'type part))
-                  (text (alist-get 'text part))
-                  (image (alist-get 'image part)))
+                  (text (alist-get 'text part)))
               `((type . ,(symbol-name type))
-                (,type . ,(or text image)))))
+                (,type . ,text))))
           (alist-get 'content msg))))
   `((role . ,role) (content . ,(vconcat content)))))
 
@@ -861,16 +807,6 @@ Also remove the TITLE and ID entries."
       (let ((messages-copy (cl-copy-list (alist-get 'messages conversation))))
         (setf (alist-get 'messages conversation-copy) messages-copy)
         (ellm--add-system-message system-directives conversation-copy)))
-    (when (eq ellm-model-size 'image)
-      (let* ((messages (alist-get 'messages conversation))
-             (prompt
-              (alist-get 'content (car (last messages)))))
-        (setq conversation-copy
-              `((model . ,(ellm--get-conversation-model conversation))
-                (prompt . ,prompt)
-                (quality . "hq")
-                (style . "vivid")  ; "natural"
-              ))))
     conversation-copy))
 
 (defun ellm--prepare-request-body-anthropic (conversation)
@@ -891,19 +827,14 @@ Also remove the TITLE and ID entries."
          (config (alist-get provider ellm-provider-configurations)))
     (funcall (alist-get 'prepare-request-body config) conversation)))
 
-(defun ellm--get-url-default (provider)
-  "Get the URL to send the request to based on `PROVIDER'."
-  (let* ((provider-name (symbol-name provider))
+(defun ellm--get-url (conversation)
+  "Get the URL to send the request to based on the provider of `CONVERSATION'."
+  (let* ((provider (ellm--get-model-provider conversation))
+         (provider-name (symbol-name provider))
          (url (intern (format "ellm--%s-api-url" provider-name))))
     (if (boundp url) (symbol-value url)
       (error "ellm--get-url: Unknown provider or missing url: %s"
              provider-name))))
-
-(defun ellm--get-url (conversation)
-  "Get the URL to send the request to based on `CONVERSATION'."
-  (if (string= (ellm--get-conversation-model conversation) "dall-e-3")
-      "https://api.openai.com/v1/images/generations"
-    (ellm--get-url-default (ellm--get-model-provider conversation))))
 
 (defun ellm-conversations-buffer-from-project ()
   "Get the conversations buffer associated to the current project.
@@ -1023,10 +954,7 @@ The `RESPONSE' is expected to be a string."
          (title (elt split-response 0))
          (content (elt split-response 1)))
     (ellm--add-or-update-title title conversation)
-    (if (eq ellm-model-size 'image)
-        (ellm--append-to! (alist-get 'messages conversation)
-                          (ellm--make-image-message :assistant (base64-decode-string response) 'data-p))
-      (ellm--add-assistant-message conversation content))))
+    (ellm--add-assistant-message conversation content)))
 
 (defun ellm--conversations-file-header ()
   "Concatenate `ellm-org--buffer-props' into a header string."
@@ -1169,11 +1097,9 @@ is `HEADLINE-CHAR' or \"#\" by default."
 (defun ellm--stringify-message-content (content)
   "Convert the `CONTENT' of a message to a string."
   (mapconcat (lambda (part)
-               (let ((type (alist-get 'type part))
-                     (text (alist-get 'text part))
-                     (image (alist-get 'image part)))
-                 (let ((fmt-string (if (eq type 'text) "%s\n" "![IMAGE](%s)\n")))
-                   (format fmt-string (or text image)))))
+               (let ((text (alist-get 'text part))
+                     (fmt-string "%s\n"))
+                   (format fmt-string text)))
              content))
 
 (defconst ellm--lua-filter-path
