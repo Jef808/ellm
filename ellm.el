@@ -1634,33 +1634,6 @@ When at the top of the conversation, fold the subtree."
     (setq ellm--server-process nil)
     (message "ellm webserver stopped")))
 
-(defun ellm-text-to-speech (&optional text)
-  "Convert `TEXT' to speech, or the content of the active region if `TEXT' is nil."
-  (interactive)
-  (unless text
-    (unless (use-region-p)
-      (user-error "No active region to convert to speech"))
-    (setq text (buffer-substring-no-properties (region-beginning) (region-end)))
-    (let* ((timestamp (format-time-string "%Y%m%d%H%M%S"))
-           (filepath (concat "~/.ellm/speech/" timestamp ".wav"))
-           (url (concat ellm-server-host ":" (number-to-string ellm-server-port) "/tts"))
-           (data `(("input" . ,text)
-                   ("filepath" . ,filepath))))
-      (request
-        url
-        :type "POST"
-        :data (json-encode `(("data" . ,data)))
-        :headers '(("Content-Type" . "application/json"))
-        :parser 'json-read
-        :success (cl-function
-                  (lambda (&key data &allow-other-keys)
-                    (progn
-                      (start-process "aplay-process" nil "aplay" "-q" filepath)
-                      (message data))))
-        :error (cl-function
-                (lambda (&key error-thrown &allow-other-keys)
-                  (message "Error: %S" error-thrown)))))))
-
 (defface ellm-context-buffer-face
   '((((background dark)) (:background "#328C0411328C" :extend t))  ; Very dark magenta
     (t                   (:background "#CD73FBEECD73" :extend t))) ; Very pale green
