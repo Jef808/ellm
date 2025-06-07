@@ -250,7 +250,7 @@ For development or testing with minimal token usage:
 
 This uses the smallest configured model with 10 output tokens.
 
-### Common Issues
+### Possible Issues
 
 Check the `*ellm-logs*` buffer and see what fits:
 
@@ -261,12 +261,6 @@ Check the `*ellm-logs*` buffer and see what fits:
 ## Contributing
 
 Pull requests are welcomed!
-
-### Areas for Contribution
-
-- Additional LLM providers
-- Better conversation search/filtering
-- Improved context management
 
 ## License
 
