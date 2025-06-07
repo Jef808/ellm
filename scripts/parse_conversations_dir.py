@@ -1,8 +1,10 @@
 import re
-import sys
 import json
 from pathlib import Path
 from datetime import datetime
+
+import typer
+from typing_extensions import Annotated
 
 
 SPACES_PATTERN = re.compile(r"\s+")
@@ -10,6 +12,11 @@ TITLE_PATTERN = re.compile(r"\* (.*?)\s+\[(.*?)\]")
 PROPERTIES_PATTERN = re.compile(r':PROPERTIES:\n(.*?):END:', re.DOTALL)
 MESSAGES_PATTERN = re.compile(r"\*\* (User|Assistant)\n(.*?)(?=\*\* |\Z)", re.DOTALL)
 
+app = typer.Typer(
+    name="ellm-parser",
+    help="Parse ELLM conversation files from org-mode format to JSON.",
+    add_completion=False
+)
 
 def parse_properties(property_drawer):
     """Parse an org property drawer from a string to a dictionary."""
@@ -94,7 +101,7 @@ def split_subtrees(org_content_lines: list[str]) -> list[str]:
     return trees
 
 
-def parse_conversations_file(ellm_conversations_filepath):
+def parse_conversations_file(ellm_conversations_filepath: str):
     """Parse all conversations in the file into an array of dictionaries."""
     project_name = ellm_conversations_filepath.split('/')[-1].split("-", maxsplit=1)[1].split(".")[0]
 
@@ -116,28 +123,172 @@ def parse_conversations_file(ellm_conversations_filepath):
     return conversations
 
 
-def glob_conversations_files(ellm_conversations_dir):
+def glob_conversations_files(ellm_conversations_dir: Path) -> list[str]:
     """Retrieve all the filepaths of conversations file in the directory."""
-    dir_path = Path(ellm_conversations_dir)
+    if not ellm_conversations_dir.is_dir():
+        raise ValueError(f"Directory not found: {ellm_conversations_dir}")
 
-    if not dir_path.is_dir():
-        raise ValueError(f"Directory not found: {directory_path}")
-
-    return map(str, dir_path.glob("conversations-*.org"))
+    return [str(p) for p in ellm_conversations_dir.glob("conversations-*.org")]
 
 
-if __name__ == "__main__":
-    ellm_conversations_directory = sys.argv[1]
+@app.command()
+def parse(
+    conversations_dir: Annotated[
+        Path,
+        typer.Argument(
+            help="Directory containing ELLM conversation files (conversations-*.org)",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            readable=True
+        )
+    ],
+    output_dir: Annotated[
+        Path,
+        typer.Argument(
+            help="Directory where the output JSON file (ellm.json) will be saved",
+            file_okay=False,
+            dir_okay=True,
+            writable=True
+        )
+    ],
+    output_filename: Annotated[
+        str,
+        typer.Option(
+            "--output-filename", "-o",
+            help="Name of the output JSON file (without extension)"
+        )
+    ] = "ellm",
+    print_output: Annotated[
+        bool,
+        typer.Option(
+            "--print/--no-print", "-p/-np",
+            help="Print the parsed conversations to stdout"
+        )
+    ] = True,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose", "-v",
+            help="Enable verbose output with processing information"
+        )
+    ] = False
+):
+    """
+    Parse ELLM conversation files from org-mode format to JSON.
 
-    output_directory = sys.argv[2]
+    This command processes all conversations-*.org files in the specified directory
+    and converts them to a single JSON file containing all parsed conversations.
 
-    ellm_conversations_files = glob_conversations_files(ellm_conversations_directory)
+    Each conversation includes:
+    - Title and timestamp
+    - Project name (extracted from filename)
+    - Properties (like temperature settings)
+    - Messages with role (user/assistant) and content
+
+    Example usage:
+        ellm-parser parse ./conversations ./output
+        ellm-parser parse ./conversations ./output --output-filename my_conversations --no-print
+    """
+    # Create output directory if it doesn't exist
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if verbose:
+        typer.echo(f"Searching for conversation files in: {conversations_dir}")
+
+    try:
+        ellm_conversations_files = glob_conversations_files(conversations_dir)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    if not ellm_conversations_files:
+        typer.echo(f"No conversation files found in {conversations_dir}", err=True)
+        typer.echo("Looking for files matching pattern: conversations-*.org", err=True)
+        raise typer.Exit(1)
+
+    if verbose:
+        typer.echo(f"Found {len(ellm_conversations_files)} conversation files:")
+        for file in ellm_conversations_files:
+            typer.echo(f"  - {file}")
 
     conversations = []
     for file in ellm_conversations_files:
-        conversations.extend(parse_conversations_file(file))
+        if verbose:
+            typer.echo(f"Processing: {file}")
 
-    with open(f"{output_directory}/ellm.json", "w+") as f:
-        json.dump(conversations, f, default=str)
+        file_conversations = parse_conversations_file(file)
+        conversations.extend(file_conversations)
 
-    print(json.dumps(conversations, indent=2, default=str))
+        if verbose:
+            typer.echo(f"  Parsed {len(file_conversations)} conversations")
+
+    output_path = output_dir / f"{output_filename}.json"
+
+    if verbose:
+        typer.echo(f"Writing {len(conversations)} total conversations to: {output_path}")
+
+    with open(output_path, "w") as f:
+        json.dump(conversations, f, default=str, indent=2)
+
+    typer.echo(f"Successfully parsed {len(conversations)} conversations to {output_path}")
+
+    if print_output:
+        typer.echo("\nParsed conversations:")
+        typer.echo(json.dumps(conversations, indent=2, default=str))
+
+
+@app.command()
+def validate(
+    conversations_dir: Annotated[
+        Path,
+        typer.Argument(
+            help="Directory containing ELLM conversation files to validate",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            readable=True
+        )
+    ]
+):
+    """
+    Validate ELLM conversation files without generating output.
+
+    This command checks if the conversation files can be parsed successfully
+    and reports any issues found.
+    """
+    try:
+        ellm_conversations_files = glob_conversations_files(conversations_dir)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    if not ellm_conversations_files:
+        typer.echo(f"No conversation files found in {conversations_dir}", err=True)
+        raise typer.Exit(1)
+
+    total_conversations = 0
+    errors = []
+
+    for file in ellm_conversations_files:
+        typer.echo(f"Validating: {file}")
+        try:
+            file_conversations = parse_conversations_file(file)
+            total_conversations += len(file_conversations)
+            typer.echo(f"  ✓ {len(file_conversations)} conversations parsed successfully")
+        except Exception as e:
+            error_msg = f"  ✗ Error parsing {file}: {e}"
+            typer.echo(error_msg, err=True)
+            errors.append(error_msg)
+
+    if errors:
+        typer.echo(f"\nValidation completed with {len(errors)} errors:")
+        for error in errors:
+            typer.echo(error, err=True)
+        raise typer.Exit(1)
+    else:
+        typer.echo(f"\n✓ All files validated successfully! Total conversations: {total_conversations}")
+
+
+if __name__ == "__main__":
+    app()
