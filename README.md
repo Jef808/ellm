@@ -272,8 +272,3 @@ Pull requests are welcomed!
 
 This project is licensed under the MIT License - see the LICENSE
 file for details.
-
-## Acknowledgments
-
-- Thanks to the Emacs community for inspiration and feedback
-- Built on top of excellent packages like org-mode and markdown-mode
