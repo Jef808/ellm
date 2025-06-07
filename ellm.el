@@ -390,34 +390,12 @@ See `ellm--add-context-chunk' for usage details.")
   "Get the API key from the environment for the `PROVIDER'."
   (getenv (format "%s_API_KEY" (upcase (symbol-name provider)))))
 
-;; TODO Use something like this to configure the providers
-(defmacro ellm-define-provider (name &rest config)
-  "Define a new provider with given `NAME' and `CONFIG'.
-The `CONFIG' should be a plist with the following keys:
-- `api-key': a function to get the API key.
-- `prepare-request-headers': a function to prepare the request headers.
-- `prepare-request-body': a function to prepare the request body.
-- `parse-response': a function to parse the response.
-- `models-alist': an alist mapping model sizes to model names."
-  `(defcustom ,(intern (format "ellm-%s-config" name))
-     ',config
-     ,(format "Configuration for %s API." name)
-     :type '(plist :key-type symbol :value-type sexp)
-     :group 'ellm))
-
-(defun ellm--get-system-messages ()
-  "Get the system messages."
-  (let ((system-messages (copy-alist ellm-system-messages)))
-    (if (boundp 'ellm-project-system-messages)
-        (append ellm-project-system-messages system-messages)
-      system-messages)))
-
 (defun ellm--get-system-message (&rest args)
   "Get the system message based on `ellm-current-system-message'.
-The `ARGS' should be keyword arguments corresponding to the signature of the
-system message function, if there are any."
+The `ARGS' should be the keyword arguments corresponding to the signature of the
+system message function, if any are needed."
   (unless ellm--test-mode
-    (let* ((message-entry (alist-get ellm-current-system-message (ellm--get-system-messages)))
+    (let* ((message-entry (alist-get ellm-current-system-message ellm-system-messages))
            (message-type (plist-get message-entry :type))
            (effective-system-message
             (cond
@@ -467,7 +445,7 @@ system message function, if there are any."
                                      (format
                                       (propertize (symbol-name (car cons-message))
                                                   'face 'font-lock-string-face)))
-                                 (ellm--get-system-messages)))))))
+                                 ellm-system-messages))))))
     (setq ellm-current-system-message sm)
     (message "...system message set to %s..." sm)))
 
@@ -774,7 +752,8 @@ The `ellm-api-key' function is used to retrieve the api key."
     ("Content-Type" . "application/json; charset=utf-8")))
 
 (defun ellm--vmessage (msg)
-  "Transform the `content' of a message `MSG' to a vector."
+  "Transform the `content' of a message `MSG' to a vector.
+This is necessary to be compatible with `json-serialize'."
   (let ((role (substring (symbol-name (alist-get 'role msg)) 1))
         (content
          (mapcar
