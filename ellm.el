@@ -1564,16 +1564,6 @@ When at the top of the conversation, fold the subtree."
       (when (re-search-backward regex nil t)
         (goto-char (match-beginning 0))))))
 
-(defun ellm--extract-symbol-definition-at-point ()
-  "Extract the definition of the symbol at point."
-  (let* ((symbol (symbol-at-point))
-         (documentation-fn (lambda (s)
-                             (if (fboundp s)
-                                 (or (documentation s) "not documented")
-                               (or (documentation-property s 'variable-documentation) "not documented"))))
-         (doc (funcall documentation-fn (symbol-at-point))))
-    (cons symbol doc)))
-
 ;; TODO Make this more portable by using different search tools as available.
 (defun ellm-search-in-conversations (&optional pattern)
   "Search for headlines matching `PATTERN' in the conversations files."
@@ -1604,41 +1594,6 @@ When at the top of the conversation, fold the subtree."
                 (when (string-match pattern (symbol-name sym))
                   (funcall doc-func sym))))
     `((variables . ,(nreverse var-list)) (functions . ,(nreverse fun-list)))))
-
-(defun ellm--extract-definitions-in-buffer ()
-  "Extract all variable and function definitions in the current buffer."
-  (interactive)
-  (let ((functions '())
-        (variables '()))
-    (save-excursion
-      (goto-char (point-min))
-      (while (re-search-forward "^(\\(?:defvar\\|defcustom\\) " nil t)
-        (push (ellm--extract-symbol-definition-at-point) variables))
-      (goto-char (point-min))
-      (while (re-search-forward "^(defun " nil t)
-        (push (ellm--extract-symbol-definition-at-point) functions)))
-    `((variables . ,(nreverse variables)) (functions . ,(nreverse functions)))))
-
-(defun ellm--extract-and-show-definitions-in-json ()
-  "Extract and print all variable and function definitions in the current buffer."
-  (interactive)
-  (let* ((definitions (ellm--describe-symbols "ellm-"))
-         (json-string (json-serialize definitions)))
-    (with-current-buffer (get-buffer-create "*Definitions JSON*")
-      (erase-buffer)
-      (insert json-string)
-      (json-pretty-print-buffer)
-      (display-buffer (current-buffer)))))
-
-(defun ellm-extract-and-save-definitions-in-json (filename)
-  "Extract and save all definitions in the current buffer to `FILENAME'.
-Note that `FILENAME' should be an absolute path to the file."
-  (interactive "FEnter filename to save definitions: ")
-  (let* ((definitions (ellm--describe-symbols "ellm-"))
-         (json-string (json-serialize definitions)))
-    (with-temp-file filename
-      (insert json-string)
-      (newline))))
 
 (defvar ellm--server-process nil
   "The process object for the ellm server.")
