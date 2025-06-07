@@ -51,12 +51,6 @@
 (defconst ellm--xai-api-url "https://api.x.ai/v1/chat/completions"
   "The URL to send requests to the xAI API.")
 
-(defconst ellm--groq-api-url "https://api.groq.com/openai/v1/chat/completions"
-  "The URL to send requests to the Groq API.")
-
-(defconst ellm--mistral-api-url "https://codestral.mistral.ai/v1/chat/completions"
-  "The URL to send requests to the Mistral API.")
-
 (defconst ellm--perplexity-api-url "https://api.perplexity.ai/chat/completions"
   "The URL to send requests to the Perplexity API.")
 
@@ -77,8 +71,6 @@
           (const :tag "OpenAI" openai)
           (const :tag "Anthropic" anthropic)
           (const :tag "xAI" xai)
-          (const :tag "Groq" groq)
-          (const :tag "Mistral" mistral)
           (const :tag "Perplexity" perplexity))
   :group 'ellm)
 
@@ -126,20 +118,6 @@
   :type 'alist
   :group 'ellm)
 
-(defcustom ellm--groq-models-alist `((big . "llama3-70b-8192")
-                                     (medium . "llama3-8b-8192")
-                                     (small . "mixtral-8x7b-32768"))
-  "Alist mapping model sizes to Groq model names."
-  :type 'alist
-  :group 'ellm)
-
-(defcustom ellm--mistral-models-alist `((big . "codestral-latest")
-                                        (medium . "mistral-large-latest")
-                                        (small . "mistral-small-latest"))
-  "Alist mapping model sizes to Mistral model names."
-  :type 'alist
-  :group 'ellm)
-
 (defcustom ellm--perplexity-models-alist `((big . "sonar-pro")
                                            (medium . "sonar")
                                            (small . "sonar"))
@@ -158,12 +136,6 @@
    (cons 'xai `((big . "grok-beta")
                 (medium . "grok-beta")
                 (small . "grok-beta")))
-   (cons 'groq `((big . "llama3-70b-8192")
-                 (medium . "llama3-8b-8292")
-                 (small . "mixtral-8x7b-32768")))
-   (cons 'mistral `((big . "codestral-latest")
-                    (medium . "mistral-large-latest")
-                    (small . "mistral-small-latest")))
    (cons 'perplexity `((big . "sonar-pro")
                        (medium . "sonar")
                        (small . "sonar"))))
@@ -177,12 +149,6 @@
                               ("grok-beta" . (:provider xai :size big))
                               ("grok-beta" . (:provider xai :size medium))
                               ("grok-beta" . (:provider xai :size small))
-                              ("llama3-70b-8192" . (:provider groq :size big))
-                              ("llama3-8b-8292" . (:provider groq :size medium))
-                              ("mixtral-8x7b-32768" . (:provider groq :size small))
-                              ("codestral-latest" . (:provider mistral :size big))
-                              ("mistral-large-latest" . (:provider mistral :size medium))
-                              ("mistral-small-latest" . (:provider mistral :size small))
                               ("sonar-pro" . (:provider perplexity :size big))
                               ("sonar" . (:provider perplexity :size medium))
                               ("sonar" . (:provider perplexity :size small)))
@@ -203,14 +169,6 @@
             (prepare-request-body . ellm--prepare-request-body-default)
             (parse-response . ellm--parse-response-openai)
             (models-alist . ,ellm--xai-models-alist)))
-    (groq . ((prepare-request-headers . ellm--prepare-request-headers-default)
-             (prepare-request-body . ellm--prepare-request-body-default)
-             (parse-response . ellm--parse-response-openai)
-             (models-alist . ,ellm--groq-models-alist)))
-    (mistral . ((prepare-request-headers . ellm--prepare-request-headers-default)
-                (prepare-request-body . ellm--prepare-request-body-default)
-                (parse-response . ellm--parse-response-openai)
-                (models-alist . ,ellm--mistral-models-alist)))
     (perplexity . ((prepare-request-headers . ellm--prepare-request-headers-default)
                    (prepare-request-body . ellm--prepare-request-body-default)
                    (parse-response . ellm--parse-response-openai)
