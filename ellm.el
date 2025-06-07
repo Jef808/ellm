@@ -7,7 +7,7 @@
 ;; Created: March 25, 2024
 ;; Modified: August 02, 2024
 ;; Version: 1.0.0
-;; Keywords: comm convenience data docs extensions faces files help hypermedia languages local matching multimedia outlines tools
+;; Keywords: convenience extensions lisp local hypermedia matching outlines tools
 ;; Homepage: https://github.com/Jef808/ellm
 ;; Package-Requires: ((emacs "29.1"))
 ;;
@@ -15,7 +15,7 @@
 ;;
 ;;; Commentary:
 ;;
-;;  Description
+;;  This package provides a simple interface to interact with LLMs within your workflow.
 ;;
 ;;; Code:
 
@@ -37,16 +37,6 @@
 (defvar ellm--prompt-history nil
   "Store for prompts history.")
 
-(defcustom ellm-server-host "localhost"
-  "The host to use for the webserver."
-  :type 'string
-  :group 'ellm)
-
-(defcustom ellm-server-port 5040
-  "The port to use for the webserver."
-  :type 'integer
-  :group 'ellm)
-
 (defcustom ellm-api-key #'ellm-api-key-from-env
   "A function taking a PROVIDER and returning its API key."
   :type 'function
@@ -60,12 +50,6 @@
 
 (defconst ellm--xai-api-url "https://api.x.ai/v1/chat/completions"
   "The URL to send requests to the xAI API.")
-
-(defconst ellm--groq-api-url "https://api.groq.com/openai/v1/chat/completions"
-  "The URL to send requests to the Groq API.")
-
-(defconst ellm--mistral-api-url "https://codestral.mistral.ai/v1/chat/completions"
-  "The URL to send requests to the Mistral API.")
 
 (defconst ellm--perplexity-api-url "https://api.perplexity.ai/chat/completions"
   "The URL to send requests to the Perplexity API.")
@@ -87,8 +71,6 @@
           (const :tag "OpenAI" openai)
           (const :tag "Anthropic" anthropic)
           (const :tag "xAI" xai)
-          (const :tag "Groq" groq)
-          (const :tag "Mistral" mistral)
           (const :tag "Perplexity" perplexity))
   :group 'ellm)
 
@@ -97,8 +79,7 @@
   :type '(choice
           (const :tag "Big" big)
           (const :tag "Medium" medium)
-          (const :tag "Small" small)
-          (const :tag "Image" image))
+          (const :tag "Small" small))
   :group 'ellm)
 
 (defcustom ellm-model "gpt-4o"
@@ -118,8 +99,7 @@
 
 (defcustom ellm--openai-models-alist `((big . "gpt-4o")
                                        (medium . "gpt-3.5-turbo")
-                                       (small . "gpt-3.5-turbo")
-                                       (image . "dall-e-3"))
+                                       (small . "gpt-3.5-turbo"))
   "Alist mapping model sizes to OpenAI model names."
   :type 'alist
   :group 'ellm)
@@ -138,20 +118,6 @@
   :type 'alist
   :group 'ellm)
 
-(defcustom ellm--groq-models-alist `((big . "llama3-70b-8192")
-                                     (medium . "llama3-8b-8192")
-                                     (small . "mixtral-8x7b-32768"))
-  "Alist mapping model sizes to Groq model names."
-  :type 'alist
-  :group 'ellm)
-
-(defcustom ellm--mistral-models-alist `((big . "codestral-latest")
-                                        (medium . "mistral-large-latest")
-                                        (small . "mistral-small-latest"))
-  "Alist mapping model sizes to Mistral model names."
-  :type 'alist
-  :group 'ellm)
-
 (defcustom ellm--perplexity-models-alist `((big . "sonar-pro")
                                            (medium . "sonar")
                                            (small . "sonar"))
@@ -163,20 +129,13 @@
   (list
    (cons 'openai `((big . "gpt-4o")
                    (medium . "gpt-3.5-turbo")
-                   (small . "gpt-3.5-turbo")
-                   (image . "dall-e-3")))
+                   (small . "gpt-3.5-turbo")))
    (cons 'anthropic `((big . "claude-sonnet-4-20250514")
                       (medium . "claude-3-7-sonnet-20250219")
                       (small . "claude-3-5-haiku-20241022")))
    (cons 'xai `((big . "grok-beta")
                 (medium . "grok-beta")
                 (small . "grok-beta")))
-   (cons 'groq `((big . "llama3-70b-8192")
-                 (medium . "llama3-8b-8292")
-                 (small . "mixtral-8x7b-32768")))
-   (cons 'mistral `((big . "codestral-latest")
-                    (medium . "mistral-large-latest")
-                    (small . "mistral-small-latest")))
    (cons 'perplexity `((big . "sonar-pro")
                        (medium . "sonar")
                        (small . "sonar"))))
@@ -184,19 +143,12 @@
 
 (defcustom ellm-model-alist `(("gpt-4o" . (:provider openai :size big))
                               ("gpt-3.5-turbo" . (:provider openai :size small))
-                              ("dall-e-3" . (:provider openai :size image))
                               ("claude-sonnet-4-20250514" . (:provider anthropic :size big))
                               ("claude-3-7-sonnet-20250219" . (:provider anthropic :size medium))
                               ("claude-3-5-haiku-20241022" . (:provider anthropic :size small))
                               ("grok-beta" . (:provider xai :size big))
                               ("grok-beta" . (:provider xai :size medium))
                               ("grok-beta" . (:provider xai :size small))
-                              ("llama3-70b-8192" . (:provider groq :size big))
-                              ("llama3-8b-8292" . (:provider groq :size medium))
-                              ("mixtral-8x7b-32768" . (:provider groq :size small))
-                              ("codestral-latest" . (:provider mistral :size big))
-                              ("mistral-large-latest" . (:provider mistral :size medium))
-                              ("mistral-small-latest" . (:provider mistral :size small))
                               ("sonar-pro" . (:provider perplexity :size big))
                               ("sonar" . (:provider perplexity :size medium))
                               ("sonar" . (:provider perplexity :size small)))
@@ -217,14 +169,6 @@
             (prepare-request-body . ellm--prepare-request-body-default)
             (parse-response . ellm--parse-response-openai)
             (models-alist . ,ellm--xai-models-alist)))
-    (groq . ((prepare-request-headers . ellm--prepare-request-headers-default)
-             (prepare-request-body . ellm--prepare-request-body-default)
-             (parse-response . ellm--parse-response-openai)
-             (models-alist . ,ellm--groq-models-alist)))
-    (mistral . ((prepare-request-headers . ellm--prepare-request-headers-default)
-                (prepare-request-body . ellm--prepare-request-body-default)
-                (parse-response . ellm--parse-response-openai)
-                (models-alist . ,ellm--mistral-models-alist)))
     (perplexity . ((prepare-request-headers . ellm--prepare-request-headers-default)
                    (prepare-request-body . ellm--prepare-request-body-default)
                    (parse-response . ellm--parse-response-openai)
@@ -352,7 +296,9 @@ markdown. Include a simple diagram using ASCII art if possible. Do not
 implement any code; focus solely on the architectural design."))
   "Alist mapping system message names to their content.
 The content of those messages are the system messages that will be used as
-instructions for the language models in new conversations."
+instructions for the language models in new conversations.
+Allowing for string templates is useful e.g. for automatically setting the
+language of code generation system messages."
   :safe #'always
   :type '(alist :key-type symbol
                 :value-type (choice
@@ -377,13 +323,13 @@ instructions for the language models in new conversations."
   "## CONTEXT:\n%s\n\n## PROMPT:\n%s\n"
   "The format string to use with `format' for building the context message.
 This message will be prepended to the first user prompt of a conversation.
-See `ellm--add-context-from-region' for usage details.")
+See `ellm--add-context-chunk' for usage details.")
 
 (defvar ellm-prompt-context-fmt-string-anthropic
   "<context>\n%s\n</context>\n\n<prompt>\n%s\n</prompt>"
   "The format string to use with `format' for building the context message.
 This message will be prepended to the first user prompt of a conversation.
-See `ellm--add-context-from-region' for usage details.")
+See `ellm--add-context-chunk' for usage details.")
 
 (defconst ellm-org--buffer-props
   '(:STARTUP overview
@@ -391,17 +337,11 @@ See `ellm--add-context-from-region' for usage details.")
     :OPTIONS toc:nil)
   "Properties to set for conversations buffers.")
 
-(defvar ellm-auto-export nil
-  "If non-nil, the chat is automatically exported when the response is received.")
-
 (defconst ellm--log-buffer-name "*ellm-logs*"
   "Log buffer for LLM messages.")
 
 (defconst ellm--temp-conversations-buffer-name "*ellm-test*"
   "The file to store conversation history.")
-
-(defconst ellm--server-buffer-name "*ellm-server*"
-  "The name of the buffer used to display the ellm server output.")
 
 (defconst ellm--context-buffer-name "*ellm-context*"
   "The name of the buffer used to display the context chunks.")
@@ -410,38 +350,12 @@ See `ellm--add-context-from-region' for usage details.")
   "Get the API key from the environment for the `PROVIDER'."
   (getenv (format "%s_API_KEY" (upcase (symbol-name provider)))))
 
-;; TODO Use something like this to configure the providers
-(defmacro ellm-define-provider (name &rest config)
-  "Define a new provider with given `NAME' and `CONFIG'.
-The `CONFIG' should be a plist with the following keys:
-- `api-key': a function to get the API key.
-- `prepare-request-headers': a function to prepare the request headers.
-- `prepare-request-body': a function to prepare the request body.
-- `parse-response': a function to parse the response.
-- `models-alist': an alist mapping model sizes to model names."
-  `(defcustom ,(intern (format "ellm-%s-config" name))
-     ',config
-     ,(format "Configuration for %s API." name)
-     :type '(plist :key-type symbol :value-type sexp)
-     :group 'ellm))
-
-(defun ellm-get-provider-config (provider)
-  "Get the configuration for the `PROVIDER'."
-  (symbol-value (intern (format "ellm-%s-config" (symbol-name provider)))))
-
-(defun ellm--get-system-messages ()
-  "Get the system messages."
-  (let ((system-messages (copy-alist ellm-system-messages)))
-    (if (boundp 'ellm-project-system-messages)
-        (append ellm-project-system-messages system-messages)
-      system-messages)))
-
 (defun ellm--get-system-message (&rest args)
   "Get the system message based on `ellm-current-system-message'.
-The `ARGS' should be keyword arguments corresponding to the signature of the
-system message function, if there are any."
+The `ARGS' should be the keyword arguments corresponding to the signature of the
+system message function, if any are needed."
   (unless ellm--test-mode
-    (let* ((message-entry (alist-get ellm-current-system-message (ellm--get-system-messages)))
+    (let* ((message-entry (alist-get ellm-current-system-message ellm-system-messages))
            (message-type (plist-get message-entry :type))
            (effective-system-message
             (cond
@@ -471,7 +385,6 @@ system message function, if there are any."
   "Prompt the user to choose a setting to configure."
   (let ((choices
          (list (cons (ellm--toggle-test-mode-description) #'ellm-toggle-test-mode)
-               (cons (ellm--toggle-save-conversations-description) #'ellm-toggle-save-conversations)
                (cons (ellm--toggle-debug-mode-description) #'ellm-toggle-debug-mode)
                (cons (ellm--provider-description) #'ellm-set-provider)
                (cons (ellm--model-size-description) #'ellm-set-model-size)
@@ -492,7 +405,7 @@ system message function, if there are any."
                                      (format
                                       (propertize (symbol-name (car cons-message))
                                                   'face 'font-lock-string-face)))
-                                 (ellm--get-system-messages)))))))
+                                 ellm-system-messages))))))
     (setq ellm-current-system-message sm)
     (message "...system message set to %s..." sm)))
 
@@ -542,7 +455,7 @@ system message function, if there are any."
                                     (mapcar #'(lambda (item)
                                                 (format
                                                  (propertize (symbol-name item) 'face 'font-lock-type-face)))
-                                            '(big medium small image))))
+                                            '(big medium small))))
                 prompt-message (funcall make-error-message model-size)))
       (unless (setq ms (ellm--validation-model-size model-size))
         (error (funcall make-error-message model-size))))
@@ -623,17 +536,6 @@ When togling off, restore the previously set values."
   (setq ellm--debug-mode (not ellm--debug-mode))
   (message "...debug mode %s..." (if ellm--debug-mode "enabled" "disabled")))
 
-(defun ellm-toggle-auto-export ()
-  "Toggle automatic exports of responses."
-  (interactive)
-  (setq ellm-auto-export (not ellm-auto-export))
-  (message "...debug mode %s..." (if ellm-auto-export "enabled" "disabled")))
-
-(defun ellm-toggle-save-conversations ()
-  "Toggle saving conversations to `ellm--conversations-file'."
-  (interactive)
-  (setq ellm-save-conversations (not ellm-save-conversations)))
-
 (defun ellm--true-false-menu-item (item-title ptrue)
   "Return a menu description for `ITEM-TITLE' with a true/false value.
 Its value will be a propertized t if `PTRUE' is non-nil, nil otherwise."
@@ -641,10 +543,6 @@ Its value will be a propertized t if `PTRUE' is non-nil, nil otherwise."
         (value (if ptrue (propertize "t" 'face 'font-lock-builtin-face)
                     (propertize "nil" 'face 'font-lock-comment-face))))
     (format "%s%s%s" item-title padding value)))
-
-(defun ellm--toggle-save-conversations-description ()
-  "Return a string describing the current save conversations setting."
-  (ellm--true-false-menu-item "Save Conversations to File" ellm-save-conversations))
 
 (defun ellm--toggle-test-mode-description ()
   "Return a string describing the current save conversations setting."
@@ -688,10 +586,6 @@ Its value will be a propertized t if `PTRUE' is non-nil, nil otherwise."
   "Get the model used in the `CONVERSATION'."
   (alist-get 'model conversation))
 
-(defun ellm--get-conversation-messages (conversation)
-  "Get the messages in the `CONVERSATION'."
-  (alist-get 'messages conversation))
-
 (defun ellm--get-model (provider model-size)
   "Get the model name for the given `PROVIDER' and `MODEL-SIZE'."
   (let ((models-by-size (alist-get provider ellm--models-alist)))
@@ -715,12 +609,6 @@ The `ARG' can be either a string (the model name) or
 a list with a `model' key. (e.g. a conversation)."
   (plist-get (ellm--get-model-properties arg) :provider))
 
-(defun ellm--get-model-size (arg)
-  "Get the model-size of the model passed in `ARG'.
-The `ARG' can be either a string (the model name) or
-a list with a `model' key. (e.g. a conversation)."
-  (plist-get (ellm--get-model-properties arg) :size))
-
 (defun ellm--set-model (model)
   "Set the `MODEL' to use for the LLM prompt."
   (let ((model-properties (ellm--get-model-properties model)))
@@ -738,72 +626,10 @@ a list with a `model' key. (e.g. a conversation)."
     (lua-mode . "lua")
     (c++-mode . "cpp")
     (c++-ts-mode . "cpp")
-    (rjsx-mode . "typescript-tsx")
-    (tsx-mode . "typescript-tsx")
+    (rjsx-mode . "typescript")
+    (tsx-mode . "typescript")
     (sh-mode . "shell"))
   "Alist mapping major modes to Org mode source block languages.")
-
-(defun ellm--add-context-from-region (prompt)
-  "Use the active region if any to attach context to the `PROMPT' string.
-Use the `ellm-prompt-context-fmt-string' template to add context from that
-region in the form of a markdown code block.
-To determine the language label of the code block,
-a lookup to `ellm--major-mode-to-org-lang-alist' with the buffer's major mode
-is used, except for the special case of `org-mode' where we use the
-function `ellm--add-context-from-region-org' (which see)."
-  (if (use-region-p)
-      (let* ((r-beg (region-beginning))
-             (r-end (region-end))
-             (mode major-mode)
-             (lang (alist-get mode ellm--major-mode-to-org-lang-alist
-                              "text" nil 'string=))
-             (string-template
-              (if (eq ellm-provider 'anthropic)
-                  ellm-prompt-context-fmt-string-anthropic
-                ellm-prompt-context-fmt-string)))
-        (deactivate-mark)
-        (save-excursion
-          (goto-char r-beg)
-          (setq r-beg (pos-bol))
-          (goto-char r-end)
-          (setq r-end (pos-eol)))
-        (when (eq mode 'org-mode)
-          (let ((adjusted-values
-                 (ellm--add-context-from-region-org r-beg r-end lang)))
-            (setq r-beg (nth 0 adjusted-values)
-                  r-end (nth 1 adjusted-values)
-                  lang (nth 2 adjusted-values))))
-        (format string-template
-                lang (buffer-substring-no-properties r-beg r-end) prompt))
-    prompt))
-
-(defun ellm--add-context-from-region-org (r-beg r-end lang)
-  "Special context function for `ellm-org' buffers.
-Considering the region between `R-BEG' and `R-END', if it is
-within a code block, use the code block's language instead
-of `LANG'. Adjust the region to the body of the code block if needed.
-This function returns a list of the form (R-BEG R-END LANG) with
-the possibly adjusted values."
-  (save-excursion
-    (goto-char r-beg)
-    (let* ((element (org-element-at-point-no-context))
-           (element-begin (org-element-property :begin element))
-           (element-end (org-element-property :end element)))
-      (when (and (eq (org-element-type element) 'src-block)
-                 (<= element-begin r-beg)
-                 (>= element-end r-end))
-        (progn
-          (setq lang (org-element-property :language element))
-          (let ((region-begin-at-block-begin-p
-                 (= (line-number-at-pos r-beg) (line-number-at-pos element-begin))))
-            (when region-begin-at-block-begin-p
-              (goto-char element-begin)
-              (setq r-beg (+ (line-end-position) 1)))
-            (goto-char (- element-end (+ (org-element-property :post-blank element) 1)))
-            (goto-char (line-beginning-position))
-            (when (<= (point) r-end)
-              (setq r-end (- (point) 1))))))))
-  (list r-beg r-end lang))
 
 (defmacro ellm--append-to! (place element)
   "Append ELEMENT to the end of the list stored in PLACE.
@@ -813,111 +639,15 @@ Similar to `push', but for the end of the list."
              (nconc ,place (list ,element))
            (list ,element))))
 
-(defun ellm--make-message (role content &optional image-p)
-  "Create a message with the given `ROLE' and `CONTENT'.
-Pass a non-nil `IMAGE-P' to indicate that `CONTENT' refers
-to an image.
-For image messages, the `IMAGE-P' flag indicates how to
-treat the `CONTENT' string:
-following special values for `IMAGE-P':
-  - \=image-url\=  : Treat `CONTENT' as a url
-  - \=image-path\= : Treat `CONTENT' as a filepath
-  - \=image-data\= : Treat `CONTENT' as base64 encoded bytes."
+(defun ellm--make-message (role content)
+  "Create a message with the given `ROLE' and `CONTENT'."
   (unless (and
            (memq role '(:user :assistant :system))
-           (memq image-p '('image-url 'image-path 'image-data nil))
            (stringp content))
-    (error "Invalid message role, content or image-p: %S %S %S" role content image-p))
-  (let* ((type (if image-p 'image 'text))
-         (data (if image-p (ellm--encode-image content image-p) content)))
+    (error "Invalid message role or content: %S %S" role content))
+  (let* ((type 'text)
+         (data content))
     `((role . ,role) (content . (,`((type . ,type) (,type . ,data)))))))
-
-(defun ellm--encode-image (image flag)
-  "Encode the `IMAGE' based on the `FLAG'.
-The `FLAG' is as `IMAGE-P' in `ellm--make-message' (which see)."
-  (cond
-   ((eq flag 'image-url)
-    (ellm--make-image-message :user image))
-   ((eq flag 'image-path)
-    (ellm--make-image-message :user image))
-   ((eq flag 'image-data)
-    (ellm--make-image-message :user image t))))
-
-(defun ellm--make-image-message (role image-source &optional data-p)
-  "Create an image message with the given `ROLE' and `IMAGE-SOURCE'.
-The `IMAGE-SOURCE' should be a path to an image file or a string containing
-the base64 encoded data of the image.
-If `DATA-P' is non-nil, the `IMAGE-SOURCE' is treated as a base64 encoded image."
-  (let (message-media-type
-        image-data)
-    (unless data-p
-      (let ((file-extension (file-name-extension image-source)))
-        (setq message-media-type (cond ((member file-extension '("jpg" "jpeg")) "image/jpeg")
-                                       ((string= file-extension "png") "image/png")
-                                       (t (error "Unsupported image format: %s" file-extension)))
-              image-data
-                (with-temp-buffer
-                  (insert-file-contents-literally image-source)
-                  (base64-encode-region (point-min) (point-max))
-                  (buffer-string)))
-      `((role . ,role)
-        (content . ((type . "image")
-                    (source . ((type . "base64")
-                               (media_type . ,message-media-type)
-                               (data . ,image-data))))))))))
-
-(defvar ellm--last-screenshot-counter 0
-  "Counter for the screenshot filenames.")
-
-(defvar ellm--screenshot-process nil
-  "Scrot process handle for taking screenshots.")
-
-(defun ellm--screenshot-process-done (process event path)
-  "Called when \"scrot\" process exits.
-PROCESS and EVENT are same arguments as in `set-process-sentinel'.
-PATH is the path to the file at which the screenshot is saved."
-    (setq ellm--screenshot-process nil)
-    (with-current-buffer (process-buffer process)
-      (if (not (equal event "finished\n"))
-          (progn
-            (insert event)
-            (cond ((save-excursion
-                     (goto-char (point-min))
-                     (re-search-forward "Key was pressed" nil t))
-                   (ding)
-                   (message "Key was pressed, screenshot aborted"))
-                  (t
-                   (display-buffer (process-buffer process))
-                   (message "Error running \"scrot\" program")
-                   (ding))))
-        (with-current-buffer (get-buffer ellm--context-buffer-name)
-          (let ((link (format "[[file:%s]]" path))
-                (inhibit-read-only t)
-                (beg (point)))
-            (insert link)
-            (org-display-inline-images nil t beg (point)))))))
-
-(defun ellm-take-screenshot ()
-  "Take a screenshot."
-  (interactive)
-  (let* ((dir "/tmp")
-         (filename (format "screenshot-%s.%s" ellm--last-screenshot-counter "png"))
-         (path (expand-file-name filename dir)))
-    (cl-incf ellm--last-screenshot-counter)
-    (when (get-buffer "*scrot*")
-      (with-current-buffer (get-buffer "*scrot*")
-        (erase-buffer)))
-    (setq ellm--screenshot-process
-          (or
-           (start-process "scrot" "*scrot*" "scrot" "-s" path)
-           (error "Unable to start scrot process")))
-    (when ellm--screenshot-process
-      (message "Click on a window, or select a rectangle...")
-      (set-process-sentinel
-       ellm--screenshot-process
-       `(lambda (process event)
-          (ellm--screenshot-process-done
-           process event ,path))))))
 
 (defun ellm--add-system-message (content conversation)
   "Add a system message with `CONTENT' to the `CONVERSATION'.
@@ -982,16 +712,16 @@ The `ellm-api-key' function is used to retrieve the api key."
     ("Content-Type" . "application/json; charset=utf-8")))
 
 (defun ellm--vmessage (msg)
-  "Transform the `content' of a message `MSG' to a vector."
+  "Transform the `content' of a message `MSG' to a vector.
+This is necessary to be compatible with `json-serialize'."
   (let ((role (substring (symbol-name (alist-get 'role msg)) 1))
         (content
          (mapcar
           (lambda (part)
             (let ((type (alist-get 'type part))
-                  (text (alist-get 'text part))
-                  (image (alist-get 'image part)))
+                  (text (alist-get 'text part)))
               `((type . ,(symbol-name type))
-                (,type . ,(or text image)))))
+                (,type . ,text))))
           (alist-get 'content msg))))
   `((role . ,role) (content . ,(vconcat content)))))
 
@@ -1016,16 +746,6 @@ Also remove the TITLE and ID entries."
       (let ((messages-copy (cl-copy-list (alist-get 'messages conversation))))
         (setf (alist-get 'messages conversation-copy) messages-copy)
         (ellm--add-system-message system-directives conversation-copy)))
-    (when (eq ellm-model-size 'image)
-      (let* ((messages (alist-get 'messages conversation))
-             (prompt
-              (alist-get 'content (car (last messages)))))
-        (setq conversation-copy
-              `((model . ,(ellm--get-conversation-model conversation))
-                (prompt . ,prompt)
-                (quality . "hq")
-                (style . "vivid")  ; "natural"
-              ))))
     conversation-copy))
 
 (defun ellm--prepare-request-body-anthropic (conversation)
@@ -1046,19 +766,14 @@ Also remove the TITLE and ID entries."
          (config (alist-get provider ellm-provider-configurations)))
     (funcall (alist-get 'prepare-request-body config) conversation)))
 
-(defun ellm--get-url-default (provider)
-  "Get the URL to send the request to based on `PROVIDER'."
-  (let* ((provider-name (symbol-name provider))
+(defun ellm--get-url (conversation)
+  "Get the URL to send the request to based on the provider of `CONVERSATION'."
+  (let* ((provider (ellm--get-model-provider conversation))
+         (provider-name (symbol-name provider))
          (url (intern (format "ellm--%s-api-url" provider-name))))
     (if (boundp url) (symbol-value url)
       (error "ellm--get-url: Unknown provider or missing url: %s"
              provider-name))))
-
-(defun ellm--get-url (conversation)
-  "Get the URL to send the request to based on `CONVERSATION'."
-  (if (string= (ellm--get-conversation-model conversation) "dall-e-3")
-      "https://api.openai.com/v1/images/generations"
-    (ellm--get-url-default (ellm--get-model-provider conversation))))
 
 (defun ellm-conversations-buffer-from-project ()
   "Get the conversations buffer associated to the current project.
@@ -1178,10 +893,7 @@ The `RESPONSE' is expected to be a string."
          (title (elt split-response 0))
          (content (elt split-response 1)))
     (ellm--add-or-update-title title conversation)
-    (if (eq ellm-model-size 'image)
-        (ellm--append-to! (alist-get 'messages conversation)
-                          (ellm--make-image-message :assistant (base64-decode-string response) 'data-p))
-      (ellm--add-assistant-message conversation content))))
+    (ellm--add-assistant-message conversation content)))
 
 (defun ellm--conversations-file-header ()
   "Concatenate `ellm-org--buffer-props' into a header string."
@@ -1225,22 +937,7 @@ The `RESPONSE' is expected to be a string."
         (insert messages-to-insert)
         (when ellm-save-conversations
           (save-buffer)))
-      (ellm--display-conversations-buffer conversations-buffer 'highlight-last-message)
-      (when ellm-auto-export
-        (ellm-export-conversation)))))
-
-(defun ellm--image-message-p (message)
-  "Check if the `MESSAGE' is an image message."
-  (let ((content (alist-get 'content message)))
-    (and (consp content)
-         (string= (alist-get 'type content) "image"))))
-
-(defun ellm--insert-image-message (message)
-  "Insert the `MESSAGE' into the current buffer as an image."
-  (let* ((content (alist-get 'content message))
-         (source (alist-get 'source content))
-         (data (alist-get 'data source)))
-    (insert-image (create-image data nil 'data-p :width 400))))
+      (ellm--display-conversations-buffer conversations-buffer 'highlight-last-message))))
 
 (defun ellm--insert-heading-and-metadata (title id model temperature system-alias)
   "Insert an Org heading with properties.
@@ -1339,11 +1036,9 @@ is `HEADLINE-CHAR' or \"#\" by default."
 (defun ellm--stringify-message-content (content)
   "Convert the `CONTENT' of a message to a string."
   (mapconcat (lambda (part)
-               (let ((type (alist-get 'type part))
-                     (text (alist-get 'text part))
-                     (image (alist-get 'image part)))
-                 (let ((fmt-string (if (eq type 'text) "%s\n" "![IMAGE](%s)\n")))
-                   (format fmt-string (or text image)))))
+               (let ((text (alist-get 'text part))
+                     (fmt-string "%s\n"))
+                   (format fmt-string text)))
              content))
 
 (defconst ellm--lua-filter-path
@@ -1462,14 +1157,6 @@ If `POSN' is nil, the current point is used."
     (and (org-at-heading-p)
          (= (org-element-property :level (org-element-at-point-no-context)) level))))
 
-(defun ellm-org--plain-text (data)
-  "Get the plain text content of the given org `DATA'.
-The `DATA' must be as the data accepted by `org-element-interpret-data'
-\(which see\)."
-  (with-temp-buffer
-    (insert (org-element-interpret-data data))
-    (s-trim (buffer-substring-no-properties (point-min) (point-max)))))
-
 (defun ellm--conversations-buffer-p (buffer)
   "Check if the `BUFFER' is an ellm conversations buffer.
 This could either be the buffer determined
@@ -1513,21 +1200,6 @@ Optionally, the content of that message can be passed as the `PROMPT' argument."
   (let ((id (unless (ellm--at-temp-conversations-buffer-p)
               (org-entry-get (point) "ID" t))))
     (ellm--resume-conversation id prompt)))
-
-(defun ellm-chat-external (selection &optional id)
-  "Entry point for making a prompt via `emacsclient'.
-The context of the next (or first) user message is passed
-as the `SELECTION' argument. Optionally, the `ID' of a previous
-conversation can be specified to continue that conversation."
-  (setq ellm-auto-export t)
-  (when selection
-    (with-temp-buffer
-      (goto-char (point-min))
-      (set-mark (point))
-      (insert selection)
-      (if id
-          (ellm--resume-conversation id)
-        (ellm-chat)))))
 
 (defun ellm--display-conversations-buffer (buffer &optional highlight-last-message)
   "Display the conversations in `BUFFER'.
@@ -1576,20 +1248,6 @@ via `ellm-conversations-buffer-from-project' (which see)."
               (funcall fun-call #'ellm-conversations-buffer-from-project)
             (get-buffer-create ellm--temp-conversations-buffer-name))))
     (ellm--display-conversations-buffer buffer)))
-
-(defun ellm-find-conversations-file-other-window ()
-  "Open a conversation file in another window.
-The file is selected from the directory specified by `ellm--conversations-dir'
-and the file prefix specified by `ellm--conversations-filename-prefix'."
-  (interactive)
-  (let* ((default-directory (expand-file-name ellm--conversations-dir))
-         (conversation-files
-          (directory-files
-           default-directory t
-           (concat "^" (regexp-quote ellm--conversations-filename-prefix) ".*\\.org$")))
-         (chosen-file (completing-read "Choose conversation file: " conversation-files)))
-    (when chosen-file
-      (find-file-other-window chosen-file))))
 
 (defun ellm-export-conversation ()
   "Mark the current conversation in the `ellm--conversations-file'."
@@ -1744,16 +1402,6 @@ When at the top of the conversation, fold the subtree."
       (when (re-search-backward regex nil t)
         (goto-char (match-beginning 0))))))
 
-(defun ellm--extract-symbol-definition-at-point ()
-  "Extract the definition of the symbol at point."
-  (let* ((symbol (symbol-at-point))
-         (documentation-fn (lambda (s)
-                             (if (fboundp s)
-                                 (or (documentation s) "not documented")
-                               (or (documentation-property s 'variable-documentation) "not documented"))))
-         (doc (funcall documentation-fn (symbol-at-point))))
-    (cons symbol doc)))
-
 ;; TODO Make this more portable by using different search tools as available.
 (defun ellm-search-in-conversations (&optional pattern)
   "Search for headlines matching `PATTERN' in the conversations files."
@@ -1768,123 +1416,6 @@ When at the top of the conversation, fold the subtree."
                      (string-prefix-p ellm--conversations-filename-prefix (f-filename f))
                      (string-suffix-p ".org" (f-filename f)))))))
     (consult-ripgrep files effective-pattern)))
-
-(defun ellm--describe-symbols (pattern)
-  "Describe the Emacs Lisp symbols matching `PATTERN'."
-  (interactive "sDescribe symbols matching: ")
-  (let* ((fun-list '())
-         (var-list '())
-         (doc-func
-          (lambda (s)
-            (if (fboundp s)
-                (push (cons s (or (documentation s) "not documented")) fun-list)
-              (when (boundp s)
-                (push (cons s (or (documentation-property s 'variable-documentation) "not documented")) var-list))))))
-    (mapatoms (lambda (sym)
-                (when (string-match pattern (symbol-name sym))
-                  (funcall doc-func sym))))
-    `((variables . ,(nreverse var-list)) (functions . ,(nreverse fun-list)))))
-
-(defun ellm--extract-definitions-in-buffer ()
-  "Extract all variable and function definitions in the current buffer."
-  (interactive)
-  (let ((functions '())
-        (variables '()))
-    (save-excursion
-      (goto-char (point-min))
-      (while (re-search-forward "^(\\(?:defvar\\|defcustom\\) " nil t)
-        (push (ellm--extract-symbol-definition-at-point) variables))
-      (goto-char (point-min))
-      (while (re-search-forward "^(defun " nil t)
-        (push (ellm--extract-symbol-definition-at-point) functions)))
-    `((variables . ,(nreverse variables)) (functions . ,(nreverse functions)))))
-
-(defun ellm--extract-and-show-definitions-in-json ()
-  "Extract and print all variable and function definitions in the current buffer."
-  (interactive)
-  (let* ((definitions (ellm--describe-symbols "ellm-"))
-         (json-string (json-serialize definitions)))
-    (with-current-buffer (get-buffer-create "*Definitions JSON*")
-      (erase-buffer)
-      (insert json-string)
-      (json-pretty-print-buffer)
-      (display-buffer (current-buffer)))))
-
-(defun ellm-extract-and-save-definitions-in-json (filename)
-  "Extract and save all definitions in the current buffer to `FILENAME'.
-Note that `FILENAME' should be an absolute path to the file."
-  (interactive "FEnter filename to save definitions: ")
-  (let* ((definitions (ellm--describe-symbols "ellm-"))
-         (json-string (json-serialize definitions)))
-    (with-temp-file filename
-      (insert json-string)
-      (newline))))
-
-(defvar ellm--server-process nil
-  "The process object for the ellm server.")
-
-(defun ellm--server-running-p ()
-  "Return non-nil if the ellm server is running."
-  (when (and ellm--server-process
-             (process-live-p ellm--server-process))))
-
-(defun ellm-start-server ()
-  "Start the ellm Node.js server."
-  (interactive)
-  (unless (ellm--server-running-p)
-    (dolist (provider (ellm-providers-supported))
-      (let ((api-key (ellm-api-key provider)))
-        (if (not (string-empty-p api-key))
-            (setenv (format "%s_API_KEY" (upcase (symbol-name provider))) api-key)
-          (message "WARNING: ellm-start-server: No api key set for %s" (symbol-name provider)))))
-    (let* ((dir (file-name-directory (locate-library "ellm")))
-           (server-js (expand-file-name "server/server.js" dir)))
-      (setq ellm--server-process
-            (start-process "ellm-server" ellm--server-buffer-name
-                           "node" server-js
-                           "--trace-deprecation"
-                           "--host" ellm-server-host
-                           "--port" (number-to-string ellm-server-port)
-                           server-js))
-      (if (ellm--server-running-p)
-          (message "ellm server: listening at http://%s:%s" ellm-server-host (number-to-string ellm-server-port))
-        (message "ellm server: failed to start"))))
-  nil)
-
-(defun ellm-stop-server ()
-  "Stop the ellm Node.js server."
-  (interactive)
-  (when (ellm--server-running-p)
-    (kill-process ellm--server-process)
-    (setq ellm--server-process nil)
-    (message "ellm webserver stopped")))
-
-(defun ellm-text-to-speech (&optional text)
-  "Convert `TEXT' to speech, or the content of the active region if `TEXT' is nil."
-  (interactive)
-  (unless text
-    (unless (use-region-p)
-      (user-error "No active region to convert to speech"))
-    (setq text (buffer-substring-no-properties (region-beginning) (region-end)))
-    (let* ((timestamp (format-time-string "%Y%m%d%H%M%S"))
-           (filepath (concat "~/.ellm/speech/" timestamp ".wav"))
-           (url (concat ellm-server-host ":" (number-to-string ellm-server-port) "/tts"))
-           (data `(("input" . ,text)
-                   ("filepath" . ,filepath))))
-      (request
-        url
-        :type "POST"
-        :data (json-encode `(("data" . ,data)))
-        :headers '(("Content-Type" . "application/json"))
-        :parser 'json-read
-        :success (cl-function
-                  (lambda (&key data &allow-other-keys)
-                    (progn
-                      (start-process "aplay-process" nil "aplay" "-q" filepath)
-                      (message data))))
-        :error (cl-function
-                (lambda (&key error-thrown &allow-other-keys)
-                  (message "Error: %S" error-thrown)))))))
 
 (defface ellm-context-buffer-face
   '((((background dark)) (:background "#328C0411328C" :extend t))  ; Very dark magenta
@@ -2135,8 +1666,6 @@ is not found, do nothing."
           (lambda ()
             (unless global-ellm-mode
               (ellm-cleanup))))
-
-(add-hook 'kill-emacs-hook 'ellm-stop-server)
 
 (provide 'ellm)
 ;;; ellm.el ends here
