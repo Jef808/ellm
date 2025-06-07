@@ -471,7 +471,6 @@ system message function, if there are any."
   "Prompt the user to choose a setting to configure."
   (let ((choices
          (list (cons (ellm--toggle-test-mode-description) #'ellm-toggle-test-mode)
-               (cons (ellm--toggle-save-conversations-description) #'ellm-toggle-save-conversations)
                (cons (ellm--toggle-debug-mode-description) #'ellm-toggle-debug-mode)
                (cons (ellm--provider-description) #'ellm-set-provider)
                (cons (ellm--model-size-description) #'ellm-set-model-size)
@@ -629,11 +628,6 @@ When togling off, restore the previously set values."
   (setq ellm-auto-export (not ellm-auto-export))
   (message "...debug mode %s..." (if ellm-auto-export "enabled" "disabled")))
 
-(defun ellm-toggle-save-conversations ()
-  "Toggle saving conversations to `ellm--conversations-file'."
-  (interactive)
-  (setq ellm-save-conversations (not ellm-save-conversations)))
-
 (defun ellm--true-false-menu-item (item-title ptrue)
   "Return a menu description for `ITEM-TITLE' with a true/false value.
 Its value will be a propertized t if `PTRUE' is non-nil, nil otherwise."
@@ -641,10 +635,6 @@ Its value will be a propertized t if `PTRUE' is non-nil, nil otherwise."
         (value (if ptrue (propertize "t" 'face 'font-lock-builtin-face)
                     (propertize "nil" 'face 'font-lock-comment-face))))
     (format "%s%s%s" item-title padding value)))
-
-(defun ellm--toggle-save-conversations-description ()
-  "Return a string describing the current save conversations setting."
-  (ellm--true-false-menu-item "Save Conversations to File" ellm-save-conversations))
 
 (defun ellm--toggle-test-mode-description ()
   "Return a string describing the current save conversations setting."
