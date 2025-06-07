@@ -1349,20 +1349,6 @@ Optionally, the content of that message can be passed as the `PROMPT' argument."
               (org-entry-get (point) "ID" t))))
     (ellm--resume-conversation id prompt)))
 
-(defun ellm-chat-external (selection &optional id)
-  "Entry point for making a prompt via `emacsclient'.
-The context of the next (or first) user message is passed
-as the `SELECTION' argument. Optionally, the `ID' of a previous
-conversation can be specified to continue that conversation."
-  (when selection
-    (with-temp-buffer
-      (goto-char (point-min))
-      (set-mark (point))
-      (insert selection)
-      (if id
-          (ellm--resume-conversation id)
-        (ellm-chat)))))
-
 (defun ellm--display-conversations-buffer (buffer &optional highlight-last-message)
   "Display the conversations in `BUFFER'.
 The window is scrolled to the last user message of the last conversation,
