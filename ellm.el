@@ -1552,22 +1552,6 @@ When at the top of the conversation, fold the subtree."
                      (string-suffix-p ".org" (f-filename f)))))))
     (consult-ripgrep files effective-pattern)))
 
-(defun ellm--describe-symbols (pattern)
-  "Describe the Emacs Lisp symbols matching `PATTERN'."
-  (interactive "sDescribe symbols matching: ")
-  (let* ((fun-list '())
-         (var-list '())
-         (doc-func
-          (lambda (s)
-            (if (fboundp s)
-                (push (cons s (or (documentation s) "not documented")) fun-list)
-              (when (boundp s)
-                (push (cons s (or (documentation-property s 'variable-documentation) "not documented")) var-list))))))
-    (mapatoms (lambda (sym)
-                (when (string-match pattern (symbol-name sym))
-                  (funcall doc-func sym))))
-    `((variables . ,(nreverse var-list)) (functions . ,(nreverse fun-list)))))
-
 (defface ellm-context-buffer-face
   '((((background dark)) (:background "#328C0411328C" :extend t))  ; Very dark magenta
     (t                   (:background "#CD73FBEECD73" :extend t))) ; Very pale green
