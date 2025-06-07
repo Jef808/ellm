@@ -377,13 +377,13 @@ instructions for the language models in new conversations."
   "## CONTEXT:\n%s\n\n## PROMPT:\n%s\n"
   "The format string to use with `format' for building the context message.
 This message will be prepended to the first user prompt of a conversation.
-See `ellm--add-context-from-region' for usage details.")
+See `ellm--add-context-chunk' for usage details.")
 
 (defvar ellm-prompt-context-fmt-string-anthropic
   "<context>\n%s\n</context>\n\n<prompt>\n%s\n</prompt>"
   "The format string to use with `format' for building the context message.
 This message will be prepended to the first user prompt of a conversation.
-See `ellm--add-context-from-region' for usage details.")
+See `ellm--add-context-chunk' for usage details.")
 
 (defconst ellm-org--buffer-props
   '(:STARTUP overview
@@ -715,68 +715,6 @@ a list with a `model' key. (e.g. a conversation)."
     (tsx-mode . "typescript-tsx")
     (sh-mode . "shell"))
   "Alist mapping major modes to Org mode source block languages.")
-
-(defun ellm--add-context-from-region (prompt)
-  "Use the active region if any to attach context to the `PROMPT' string.
-Use the `ellm-prompt-context-fmt-string' template to add context from that
-region in the form of a markdown code block.
-To determine the language label of the code block,
-a lookup to `ellm--major-mode-to-org-lang-alist' with the buffer's major mode
-is used, except for the special case of `org-mode' where we use the
-function `ellm--add-context-from-region-org' (which see)."
-  (if (use-region-p)
-      (let* ((r-beg (region-beginning))
-             (r-end (region-end))
-             (mode major-mode)
-             (lang (alist-get mode ellm--major-mode-to-org-lang-alist
-                              "text" nil 'string=))
-             (string-template
-              (if (eq ellm-provider 'anthropic)
-                  ellm-prompt-context-fmt-string-anthropic
-                ellm-prompt-context-fmt-string)))
-        (deactivate-mark)
-        (save-excursion
-          (goto-char r-beg)
-          (setq r-beg (pos-bol))
-          (goto-char r-end)
-          (setq r-end (pos-eol)))
-        (when (eq mode 'org-mode)
-          (let ((adjusted-values
-                 (ellm--add-context-from-region-org r-beg r-end lang)))
-            (setq r-beg (nth 0 adjusted-values)
-                  r-end (nth 1 adjusted-values)
-                  lang (nth 2 adjusted-values))))
-        (format string-template
-                lang (buffer-substring-no-properties r-beg r-end) prompt))
-    prompt))
-
-(defun ellm--add-context-from-region-org (r-beg r-end lang)
-  "Special context function for `ellm-org' buffers.
-Considering the region between `R-BEG' and `R-END', if it is
-within a code block, use the code block's language instead
-of `LANG'. Adjust the region to the body of the code block if needed.
-This function returns a list of the form (R-BEG R-END LANG) with
-the possibly adjusted values."
-  (save-excursion
-    (goto-char r-beg)
-    (let* ((element (org-element-at-point-no-context))
-           (element-begin (org-element-property :begin element))
-           (element-end (org-element-property :end element)))
-      (when (and (eq (org-element-type element) 'src-block)
-                 (<= element-begin r-beg)
-                 (>= element-end r-end))
-        (progn
-          (setq lang (org-element-property :language element))
-          (let ((region-begin-at-block-begin-p
-                 (= (line-number-at-pos r-beg) (line-number-at-pos element-begin))))
-            (when region-begin-at-block-begin-p
-              (goto-char element-begin)
-              (setq r-beg (+ (line-end-position) 1)))
-            (goto-char (- element-end (+ (org-element-property :post-blank element) 1)))
-            (goto-char (line-beginning-position))
-            (when (<= (point) r-end)
-              (setq r-end (- (point) 1))))))))
-  (list r-beg r-end lang))
 
 (defmacro ellm--append-to! (place element)
   "Append ELEMENT to the end of the list stored in PLACE.
@@ -1147,19 +1085,6 @@ The `RESPONSE' is expected to be a string."
           (save-buffer)))
       (ellm--display-conversations-buffer conversations-buffer 'highlight-last-message))))
 
-(defun ellm--image-message-p (message)
-  "Check if the `MESSAGE' is an image message."
-  (let ((content (alist-get 'content message)))
-    (and (consp content)
-         (string= (alist-get 'type content) "image"))))
-
-(defun ellm--insert-image-message (message)
-  "Insert the `MESSAGE' into the current buffer as an image."
-  (let* ((content (alist-get 'content message))
-         (source (alist-get 'source content))
-         (data (alist-get 'data source)))
-    (insert-image (create-image data nil 'data-p :width 400))))
-
 (defun ellm--insert-heading-and-metadata (title id model temperature system-alias)
   "Insert an Org heading with properties.
 The required properties are TITLE, ID, MODEL, TEMPERATURE and SYSTEM-ALIAS."
@@ -1380,14 +1305,6 @@ If `POSN' is nil, the current point is used."
     (and (org-at-heading-p)
          (= (org-element-property :level (org-element-at-point-no-context)) level))))
 
-(defun ellm-org--plain-text (data)
-  "Get the plain text content of the given org `DATA'.
-The `DATA' must be as the data accepted by `org-element-interpret-data'
-\(which see\)."
-  (with-temp-buffer
-    (insert (org-element-interpret-data data))
-    (s-trim (buffer-substring-no-properties (point-min) (point-max)))))
-
 (defun ellm--conversations-buffer-p (buffer)
   "Check if the `BUFFER' is an ellm conversations buffer.
 This could either be the buffer determined
@@ -1493,20 +1410,6 @@ via `ellm-conversations-buffer-from-project' (which see)."
               (funcall fun-call #'ellm-conversations-buffer-from-project)
             (get-buffer-create ellm--temp-conversations-buffer-name))))
     (ellm--display-conversations-buffer buffer)))
-
-(defun ellm-find-conversations-file-other-window ()
-  "Open a conversation file in another window.
-The file is selected from the directory specified by `ellm--conversations-dir'
-and the file prefix specified by `ellm--conversations-filename-prefix'."
-  (interactive)
-  (let* ((default-directory (expand-file-name ellm--conversations-dir))
-         (conversation-files
-          (directory-files
-           default-directory t
-           (concat "^" (regexp-quote ellm--conversations-filename-prefix) ".*\\.org$")))
-         (chosen-file (completing-read "Choose conversation file: " conversation-files)))
-    (when chosen-file
-      (find-file-other-window chosen-file))))
 
 (defun ellm-export-conversation ()
   "Mark the current conversation in the `ellm--conversations-file'."
