@@ -37,16 +37,6 @@
 (defvar ellm--prompt-history nil
   "Store for prompts history.")
 
-(defcustom ellm-server-host "localhost"
-  "The host to use for the webserver."
-  :type 'string
-  :group 'ellm)
-
-(defcustom ellm-server-port 5040
-  "The port to use for the webserver."
-  :type 'integer
-  :group 'ellm)
-
 (defcustom ellm-api-key #'ellm-api-key-from-env
   "A function taking a PROVIDER and returning its API key."
   :type 'function
@@ -396,9 +386,6 @@ See `ellm--add-context-chunk' for usage details.")
 
 (defconst ellm--temp-conversations-buffer-name "*ellm-test*"
   "The file to store conversation history.")
-
-(defconst ellm--server-buffer-name "*ellm-server*"
-  "The name of the buffer used to display the ellm server output.")
 
 (defconst ellm--context-buffer-name "*ellm-context*"
   "The name of the buffer used to display the context chunks.")
@@ -1581,45 +1568,6 @@ When at the top of the conversation, fold the subtree."
                   (funcall doc-func sym))))
     `((variables . ,(nreverse var-list)) (functions . ,(nreverse fun-list)))))
 
-(defvar ellm--server-process nil
-  "The process object for the ellm server.")
-
-(defun ellm--server-running-p ()
-  "Return non-nil if the ellm server is running."
-  (when (and ellm--server-process
-             (process-live-p ellm--server-process))))
-
-(defun ellm-start-server ()
-  "Start the ellm Node.js server."
-  (interactive)
-  (unless (ellm--server-running-p)
-    (dolist (provider (ellm-providers-supported))
-      (let ((api-key (ellm-api-key provider)))
-        (if (not (string-empty-p api-key))
-            (setenv (format "%s_API_KEY" (upcase (symbol-name provider))) api-key)
-          (message "WARNING: ellm-start-server: No api key set for %s" (symbol-name provider)))))
-    (let* ((dir (file-name-directory (locate-library "ellm")))
-           (server-js (expand-file-name "server/server.js" dir)))
-      (setq ellm--server-process
-            (start-process "ellm-server" ellm--server-buffer-name
-                           "node" server-js
-                           "--trace-deprecation"
-                           "--host" ellm-server-host
-                           "--port" (number-to-string ellm-server-port)
-                           server-js))
-      (if (ellm--server-running-p)
-          (message "ellm server: listening at http://%s:%s" ellm-server-host (number-to-string ellm-server-port))
-        (message "ellm server: failed to start"))))
-  nil)
-
-(defun ellm-stop-server ()
-  "Stop the ellm Node.js server."
-  (interactive)
-  (when (ellm--server-running-p)
-    (kill-process ellm--server-process)
-    (setq ellm--server-process nil)
-    (message "ellm webserver stopped")))
-
 (defface ellm-context-buffer-face
   '((((background dark)) (:background "#328C0411328C" :extend t))  ; Very dark magenta
     (t                   (:background "#CD73FBEECD73" :extend t))) ; Very pale green
@@ -1869,8 +1817,6 @@ is not found, do nothing."
           (lambda ()
             (unless global-ellm-mode
               (ellm-cleanup))))
-
-(add-hook 'kill-emacs-hook 'ellm-stop-server)
 
 (provide 'ellm)
 ;;; ellm.el ends here
