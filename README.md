@@ -46,7 +46,8 @@ In `package.el`
 
 ``` elisp
 (package! ellm
-  :recipe (:local-repo "~/projects/ellm"
+  :recipe (:host github
+           :repo "jef808/ellm"
            :files ("ellm.el" "format_org.lua")))
 ```
 
