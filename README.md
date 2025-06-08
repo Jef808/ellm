@@ -99,7 +99,8 @@ For example,
            (xai . "your-xai-key")
            (perplexity . "your-perplexity-key")
            ;; etc...
-           )))))
+           )))
+    (alist-get provider api-keys)))
            
 (setq ellm-api-key #'my/get-ellm-api-key)
 ```
