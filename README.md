@@ -57,10 +57,12 @@ In `config.el`
 (defun my/get-ellm-api-key (provider)
   "Get API key for PROVIDER from a list."
   (let ((api-keys
-         '((openai . "OPENAI_API_KEY*")
-           (anthropic . "ANTHROPIC_API_KEY")
-           (xai . "XAI_API_KEY")
-           (perplexity . "PERPLEXITY_API_KEY"))))
+         '((openai . "your-openai-key")
+           (anthropic . "your-anthropic-key")
+           (xai . "your-xai-key")
+           (perplexity . "your-perplexity-key")
+           ;; etc...
+           )))
     (alist-get provider api-keys)))
 
 (use-package! ellm
@@ -85,7 +87,8 @@ export PERPLEXITY_API_KEY="your-perplexity-key"
 # ... etc
 ```
 
-Or customize `ellm-api-key` to use your own key retrieval function.
+Or, as in the doom emacs installation instructions,
+customize `ellm-api-key` to use your own key retrieval function. 
 For example,
 
 ``` elisp
