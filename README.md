@@ -40,9 +40,35 @@ git clone https://github.com/Jef808/ellm.git
 (require 'ellm)
 ```
 
-### Package Manager Installation
+### Doom Emacs
 
-*Coming soon to MELPA*
+In `package.el`
+
+``` elisp
+(package! ellm
+  :recipe (:local-repo "~/projects/ellm"
+           :files ("ellm.el" "format_org.lua")))
+```
+
+In `config.el`
+
+``` elisp
+(defun my/get-ellm-api-key (provider)
+  "Get API key for PROVIDER from a list."
+  (let ((api-keys
+         '((openai . "OPENAI_API_KEY*")
+           (anthropic . "ANTHROPIC_API_KEY")
+           (xai . "XAI_API_KEY")
+           (perplexity . "PERPLEXITY_API_KEY"))))
+    (alist-get provider api-keys)))
+
+(use-package! ellm
+  :custom
+  ellm-api-key #'jf/get-ellm-api-key
+  :config
+  (ellm-setup-persistance)
+  (global-ellm-mode))
+```
 
 ## Quick Start
 
