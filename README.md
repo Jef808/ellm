@@ -77,7 +77,10 @@ In `config.el`
 
 ### 1. Set up API keys
 
-Set environment variables for your preferred providers:
+Unless you followed the example in the doom emacs installation example,
+you need to setup your api keys.
+
+One option is using environment variables:
 
 ``` bash
 export OPENAI_API_KEY="your-openai-key"
@@ -87,9 +90,8 @@ export PERPLEXITY_API_KEY="your-perplexity-key"
 # ... etc
 ```
 
-Or, as in the doom emacs installation instructions,
-customize `ellm-api-key` to use your own key retrieval function. 
-For example,
+Another is to customize `ellm-api-key` to use your own key retrieval function. 
+For example, as in the doom emacs example,
 
 ``` elisp
 (defun my/get-ellm-api-key (provider)
