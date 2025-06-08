@@ -65,7 +65,7 @@ In `config.el`
 
 (use-package! ellm
   :custom
-  ellm-api-key #'jf/get-ellm-api-key
+  ellm-api-key #'my/get-ellm-api-key
   :config
   (ellm-setup-persistance)
   (global-ellm-mode))
