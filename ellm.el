@@ -267,6 +267,13 @@ If the problem can be solved in multiple ways, briefly state the options and mak
 When you encounter incomplete or ambiguous instructions, seek clarifications from the user.
 Maintain a focus on technical precision and completeness without redundant explanations or politeness."
                                       language)))
+    (code :type function
+          :args (:language)
+          :value (lambda (language)
+                   (concat "You are an expert"
+                           (if (null language) " " (format " %s " language))
+                           "assisting a professional developer.
+Please maintain a focus on technical precision and completeness without redundant explanations or politeness.")))
     (latex-expert :type string
                   :value "You are an expert in LaTeX.")
     (prompt-generator :type string
