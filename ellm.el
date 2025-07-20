@@ -97,9 +97,9 @@
   :type 'integer
   :group 'ellm)
 
-(defcustom ellm--openai-models-alist `((big . "gpt-4o")
-                                       (medium . "gpt-3.5-turbo")
-                                       (small . "gpt-3.5-turbo"))
+(defcustom ellm--openai-models-alist `((big . "gpt-4.1")
+                                       (medium . "gpt-4.1-mini")
+                                       (small . "gpt-4.1-nano"))
   "Alist mapping model sizes to OpenAI model names."
   :type 'alist
   :group 'ellm)
@@ -127,9 +127,9 @@
 
 (defvar ellm--models-alist
   (list
-   (cons 'openai `((big . "gpt-4o")
-                   (medium . "gpt-3.5-turbo")
-                   (small . "gpt-3.5-turbo")))
+   (cons 'openai `((big . "gpt-4.1")
+                   (medium . "gpt-4.1-mini")
+                   (small . "gpt-4.1-nano")))
    (cons 'anthropic `((big . "claude-sonnet-4-20250514")
                       (medium . "claude-3-7-sonnet-20250219")
                       (small . "claude-3-5-haiku-20241022")))
@@ -141,8 +141,9 @@
                        (small . "sonar"))))
   "Alist mapping providers to their models.")
 
-(defcustom ellm-model-alist `(("gpt-4o" . (:provider openai :size big))
-                              ("gpt-3.5-turbo" . (:provider openai :size small))
+(defcustom ellm-model-alist `(("gpt-4.1" . (:provider openai :size big))
+                              ("gpt-4.1-mini" . (:provider openai :size medium))
+                              ("gpt-4.1-nano" . (:provider openai :size small))
                               ("claude-sonnet-4-20250514" . (:provider anthropic :size big))
                               ("claude-3-7-sonnet-20250219" . (:provider anthropic :size medium))
                               ("claude-3-5-haiku-20241022" . (:provider anthropic :size small))
@@ -262,9 +263,7 @@ Avoid unnecessary politeness and organizational sections like a closing summary.
                               (format "You are an expert %s programmer.
 Your primary task is to assist with code generation, ensuring accuracy and efficiency.
 When generating code, use the provided CONTEXT to tailor your responses to the user's needs.
-Provide well-commented, clean, and efficient code samples.
 If the problem can be solved in multiple ways, briefly state the options and make a recommendation for which one to use.
-When you encounter incomplete or ambiguous instructions, seek clarifications from the user.
 Maintain a focus on technical precision and completeness without redundant explanations or politeness."
                                       language)))
     (code :type function
