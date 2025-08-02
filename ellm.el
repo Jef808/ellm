@@ -669,14 +669,13 @@ Similar to `push', but for the end of the list."
            (stringp content))
     (error "Invalid message role or content: %S %S" role content))
   (let* ((image-msg (when image-path
-                      `((type . image)
-                        (source . ((type . base64)
+                      `((type . "image")
+                        (source . ((type . "base64")
                                    (media_type . ,(ellm--detect-media-type image-path))
                                    (data . ,(ellm--encode-image-to-base64 image-path)))))))
-         (text-msg `((type . text)
+         (text-msg `((type . "text")
                      (text . ,content)))
-         (content (list text-msg)))
-    (when image-msg (push image-msg content))
+         (content (if image-msg (list image-msg text-msg) (list text-msg))))
     `((role . ,role)
       (content . ,content))))
 
@@ -746,14 +745,7 @@ The `ellm-api-key' function is used to retrieve the api key."
   "Transform the `content' of a message `MSG' to a vector.
 This is necessary to be compatible with `json-serialize'."
   (let ((role (substring (symbol-name (alist-get 'role msg)) 1))
-        (content
-         (mapcar
-          (lambda (part)
-            (let ((type (alist-get 'type part))
-                  (text (alist-get 'text part)))
-              `((type . ,(symbol-name type))
-                (,type . ,text))))
-          (alist-get 'content msg))))
+        (content (alist-get 'content msg)))
     `((role . ,role) (content . ,(vconcat content)))))
 
 (defun ellm--serialize-conversation (conversation)
@@ -859,14 +851,15 @@ This function always returns nil."
          (url (ellm--get-url conversation))
          (request-headers (ellm--prepare-request-headers conversation))
          (request-body (ellm--prepare-request-body conversation))
+         (serialized-request-body (ellm--serialize-conversation request-body))
          (url-request-method "POST")
          (url-request-extra-headers request-headers)
-         (url-request-data (ellm--serialize-conversation request-body)))
+         (url-request-data serialized-request-body))
     (ellm--log `((conversation . ,conversation)
                  (output-buffer . ,(buffer-name output-buffer))
                  (request-url . ,url)
                  (request-headers . ,request-headers)
-                 (request-body . ,request-body))
+                 (request-body . ,serialized-request-body))
                "REQUEST")
     (url-retrieve url #'ellm--handle-response (list output-buffer conversation))
     (message "...Waiting for response from %s..."
