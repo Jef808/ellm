@@ -1518,22 +1518,21 @@ text content of the context chunk is wrapped in triple backticks
 and the value of the `ellm-language' is used as the language
 attribute."
   (with-current-buffer (overlay-buffer overlay)
-    (s-trim-right
-     (let* ((buffer (overlay-buffer (overlay-get overlay 'ellm-other-overlay)))
-            (language (with-current-buffer buffer
-                        (or (alist-get major-mode ellm--major-mode-to-org-lang-alist)
-                            (and (derived-mode-p 'prog-mode)
-                                 (thread-last
-                                   (symbol-name major-mode)
-                                   (string-remove-suffix "-mode")
-                                   (string-remove-suffix "-ts")))
-                            "text")))
-            (start (overlay-start overlay))
-            (end (overlay-end overlay))
-            (content (buffer-substring-no-properties start end)))
-       (if language
-           (format "```%s\n%s\n```\n\n" language content)
-         (format "```\n%s\n```\n\n" content))))))
+    (let* ((buffer (overlay-buffer (overlay-get overlay 'ellm-other-overlay)))
+           (language (with-current-buffer buffer
+                       (or (alist-get major-mode ellm--major-mode-to-org-lang-alist)
+                           (and (derived-mode-p 'prog-mode)
+                                (thread-last
+                                  (symbol-name major-mode)
+                                  (string-remove-suffix "-mode")
+                                  (string-remove-suffix "-ts")))
+                           "text")))
+           (start (overlay-start overlay))
+           (end (overlay-end overlay))
+           (content (s-trim (buffer-substring-no-properties start end))))
+      (if language
+          (format "```%s\n%s\n```\n\n" language content)
+        (format "```\n%s\n```\n\n" content)))))
 
 (defun ellm--insert-context-content (overlay)
   "Insert the content of the `OVERLAY' into the context buffer.
