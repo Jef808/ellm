@@ -860,7 +860,6 @@ This function always returns nil."
     (ellm--log `((conversation . ,conversation)
                  (output-buffer . ,(buffer-name output-buffer))
                  (request-url . ,url)
-                 (request-headers . ,request-headers)
                  (request-body . ,serialized-request-body))
                "REQUEST")
     (url-retrieve url #'ellm--handle-response (list output-buffer conversation))
@@ -893,8 +892,7 @@ updated in the `CONVERSATIONS-BUFFER'."
          nil)
         (t (goto-char url-http-end-of-headers)
            (if (<= (point-max) (point))
-               (message "...No response body (DNS resolve or TCP error)...")
-             (ellm--log "No response body (DNS resolve or TCP error)" "REQUEST-ERROR")
+             (message (ellm--log "No response body (DNS resolve or TCP error)" "REQUEST-ERROR"))
              (let ((response (ellm--parse-json-response)))
                (when response
                  (ellm--add-response-to-conversation conversations-buffer conversation response)
@@ -952,7 +950,6 @@ The `RESPONSE' is expected to be a string."
          (messages-to-insert (concat stringified-previous-messages
                                      (unless (string-empty-p stringified-previous-messages) "\n\n")
                                      org-formatted-new-messages)))
-    (ellm--log messages-to-insert "MESSAGES-TO-INSERT")
     (with-current-buffer conversations-buffer
       (let ((inhibit-read-only t))
         (when (= (point-min) (point-max))
@@ -987,7 +984,7 @@ The required properties are TITLE, ID, MODEL, TEMPERATURE and SYSTEM-ALIAS."
   (condition-case error
       (let ((response-body
              (string-trim (buffer-substring-no-properties (point) (point-max)))))
-        (ellm--log response-body "RESPONSE")
+        (ellm--log (json-parse-string response-body) "RESPONSE")
         (json-parse-string response-body))
     (json-parse-error
      (ellm--log error "JSON-PARSE-ERROR")
@@ -1001,7 +998,6 @@ This function is meant to be used with the response from the OpenAI API."
              (first-choice (aref choices 0))
              (msg (gethash "message" first-choice))
              (content (gethash "content" msg)))
-        (ellm--log content "RESPONSE-CONTENT")
         (replace-regexp-in-string "\\\\\"" "\"" content))
     (wrong-type-argument (ellm--log error "RESPONSE-ERROR"))))
 
@@ -1011,7 +1007,6 @@ This function is meant to be used with the response from the OpenAI API."
       (let* ((messages (gethash "content" response))
              (first-message (aref messages 0))
              (content (gethash "text" first-message)))
-        (ellm--log content "RESPONSE-CONTENT")
         (replace-regexp-in-string "\\\\\"" "\"" content))
     (wrong-type-argument (ellm--log error "RESPONSE-ERROR"))))
 
@@ -1043,10 +1038,7 @@ Note that both components are trimmed of whitespace."
 (defun ellm--convert-messages-to-org (messages)
   "Convert `MESSAGES' to an Org-formatted string using Pandoc."
   (let ((markdown-string (ellm--messages-to-string messages)))
-    (ellm--log markdown-string "MESSAGES-FOR-MARKDOWN")
-    (let ((org-string (ellm--markdown-to-org-sync markdown-string)))
-      (ellm--log org-string "MESSAGES-FOR-ORG")
-      org-string)))
+    (ellm--markdown-to-org-sync markdown-string)))
 
 (defun ellm--messages-to-string (messages &optional headline-char)
   "Convert the MESSAGES to a markdown string.
