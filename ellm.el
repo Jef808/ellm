@@ -1,4 +1,4 @@
-;;; ellm.el --- Description -*- lexical-binding: t; -*-
+;;; ellm.el --- Simple interface to interact with LLMs -*- lexical-binding: t; -*-
 ;;
 ;; Copyright (C) 2024 Jean-François Arbour
 ;;
@@ -222,7 +222,7 @@ Format your response in markdown."
   `((none :type string
      :value nil)
     (default :type string
-     :value "You are a useful general assistant integrated with Emacs.
+             :value "You are a useful general assistant integrated with Emacs.
 Your goal is to execute the user's task or precisely answer their questions, \
 using all the CONTEXT the user provides (if any).
 Ensure your responses are relevant and adequate based on the nature of the query.
@@ -307,19 +307,19 @@ Allowing for string templates is useful e.g. for automatically setting the
 language of code generation system messages."
   :safe #'always
   :type '(alist :key-type symbol
-                :value-type (choice
-                             (list :tag "String message"
-                                   (const :type)
-                                   (const string)
-                                   (const :value)
-                                   string)
-                             (list :tag "Function message"
-                                   (const :type)
-                                   (const function)
-                                   (const :args)
-                                   (repeat symbol)
-                                   (const :value)
-                                   function)))
+          :value-type (choice
+                       (list :tag "String message"
+                             (const :type)
+                             (const string)
+                             (const :value)
+                             string)
+                       (list :tag "Function message"
+                             (const :type)
+                             (const function)
+                             (const :args)
+                             (repeat symbol)
+                             (const :value)
+                             function)))
   :group 'ellm)
 
 (defvar ellm-current-system-message 'default
@@ -547,7 +547,7 @@ When togling off, restore the previously set values."
 Its value will be a propertized t if `PTRUE' is non-nil, nil otherwise."
   (let ((padding (make-string (- 32 (length item-title)) ? ))
         (value (if ptrue (propertize "t" 'face 'font-lock-builtin-face)
-                    (propertize "nil" 'face 'font-lock-comment-face))))
+                 (propertize "nil" 'face 'font-lock-comment-face))))
     (format "%s%s%s" item-title padding value)))
 
 (defun ellm--toggle-test-mode-description ()
@@ -602,12 +602,12 @@ Its value will be a propertized t if `PTRUE' is non-nil, nil otherwise."
 The `ARG' can be either a string (the model name) or
 a list with a `model' key. (e.g. a conversation)."
   (cond
-    ((stringp arg)
-     (alist-get arg ellm-model-alist nil nil 'equal))
-    ((consp arg)
-     (let ((model (alist-get 'model arg)))
-       (alist-get model ellm-model-alist nil nil 'equal)))
-    (t (error "Invalid argument: `%s' should be a string or a list" arg))))
+   ((stringp arg)
+    (alist-get arg ellm-model-alist nil nil 'equal))
+   ((consp arg)
+    (let ((model (alist-get 'model arg)))
+      (alist-get model ellm-model-alist nil nil 'equal)))
+   (t (error "Invalid argument: `%s' should be a string or a list" arg))))
 
 (defun ellm--get-model-provider (arg)
   "Get the provider of the model passed in `ARG'.
@@ -619,9 +619,9 @@ a list with a `model' key. (e.g. a conversation)."
   "Set the `MODEL' to use for the LLM prompt."
   (let ((model-properties (ellm--get-model-properties model)))
     (if model-properties
-      (setq ellm-model model
-            ellm-provider (plist-get model-properties :provider)
-            ellm-model-size (plist-get model-properties :size))
+        (setq ellm-model model
+              ellm-provider (plist-get model-properties :provider)
+              ellm-model-size (plist-get model-properties :size))
       (error "Model `%s' not found" model))))
 
 (defvar ellm--major-mode-to-org-lang-alist
@@ -645,15 +645,40 @@ Similar to `push', but for the end of the list."
              (nconc ,place (list ,element))
            (list ,element))))
 
-(defun ellm--make-message (role content)
-  "Create a message with the given `ROLE' and `CONTENT'."
+(defun ellm--detect-media-type (image-path)
+  "Detect the media type of the image at `IMAGE-PATH'."
+  (cond
+   ((string-match-p "\\.png\\'" image-path) "image/png")
+   ((string-match-p "\\.jpe?g\\'" image-path) "image/jpeg")
+   ((string-match-p "\\.gif\\'" image-path) "image/gif")
+   ((string-match-p "\\.webp\\'" image-path) "image/webp")
+   (t (error "Unsupported image format: %s" image-path))))
+
+(defun ellm--encode-image-to-base64 (filepath)
+  "Encode the image at FILEPATH to a base64 string."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally filepath)
+    (base64-encode-region (point-min) (point-max) t)
+    (buffer-string)))
+
+(defun ellm--make-message (role content &optional image-path)
+  "Create a message with given `ROLE', `CONTENT' and optional `IMAGE-PATH'."
   (unless (and
            (memq role '(:user :assistant :system))
            (stringp content))
     (error "Invalid message role or content: %S %S" role content))
-  (let* ((type 'text)
-         (data content))
-    `((role . ,role) (content . (,`((type . ,type) (,type . ,data)))))))
+  (let* ((image-msg (when image-path
+                      `((type . image)
+                        (source . ((type . base64)
+                                   (media_type . ,(ellm--detect-media-type image-path))
+                                   (data . ,(ellm--encode-image-to-base64 image-path)))))))
+         (text-msg `((type . text)
+                     (text . ,content)))
+         (content (list text-msg)))
+    (when image-msg (push image-msg content))
+    `((role . ,role)
+      (content . ,content))))
 
 (defun ellm--add-system-message (content conversation)
   "Add a system message with `CONTENT' to the `CONVERSATION'.
@@ -661,11 +686,11 @@ The system message is prepended to the `messages' list."
   (push (ellm--make-message :system content)
         (alist-get 'messages conversation)))
 
-(defun ellm--add-user-message (conversation content)
+(defun ellm--add-user-message (conversation content &optional image-path)
   "Append a user message with `CONTENT' to the `CONVERSATION'.
 The user message is appended to the `messages' list."
   (ellm--append-to! (alist-get 'messages conversation)
-                    (ellm--make-message :user content)))
+                    (ellm--make-message :user content image-path)))
 
 (defun ellm--add-assistant-message (conversation content)
   "Append an assistant message with `CONTENT' to the `CONVERSATION'.
@@ -673,8 +698,8 @@ The assistant message is appended to the `messages' list."
   (ellm--append-to! (alist-get 'messages conversation)
                     (ellm--make-message :assistant content)))
 
-(defun ellm--initialize-conversation (prompt)
-  "Initialize a new conversation starting with `PROMPT'.
+(defun ellm--initialize-conversation (prompt &optional image-path)
+  "Initialize a new conversation starting with `PROMPT' and optional `IMAGE-PATH'.
 Return the conversation-data alist."
   (let* ((system-message-args
           (when (derived-mode-p 'prog-mode)
@@ -693,7 +718,7 @@ Return the conversation-data alist."
            (cons 'system-alias ellm-current-system-message)
            (cons 'title nil)
            (cons 'system (apply #'ellm--get-system-message system-message-args)))))
-    (ellm--add-user-message conversation prompt)
+    (ellm--add-user-message conversation prompt image-path)
     conversation))
 
 (defun ellm--prepare-request-headers (conversation)
@@ -729,7 +754,7 @@ This is necessary to be compatible with `json-serialize'."
               `((type . ,(symbol-name type))
                 (,type . ,text))))
           (alist-get 'content msg))))
-  `((role . ,role) (content . ,(vconcat content)))))
+    `((role . ,role) (content . ,(vconcat content)))))
 
 (defun ellm--serialize-conversation (conversation)
   "Serialize the `CONVERSATION' to a JSON string.
@@ -800,7 +825,7 @@ project to target."
                                    ".org"))))
     (find-file-noselect filepath)))
 
-(defun ellm-chat (&optional current-conversation conversations-buffer prompt-wrapper user-prompt)
+(defun ellm-chat (&optional current-conversation conversations-buffer prompt-wrapper user-prompt image-filepath)
   "Send a chat request to the current provider's completion endpoint.
 This function is the main entry point for interacting with the `ellm' package.
 Optional arguments:
@@ -808,6 +833,7 @@ Optional arguments:
 - CONVERSATIONS-BUFFER: File path to save the conversation. If nil, use default.
 - PROMPT-WRAPPER: Function to wrap the prompt.
 - USER-PROMPT: Prompt string. If nil, read interactively.
+- IMAGE-FILEPATH: List of image file paths to include in the prompt.
 The function sends the request, handles the response, and updates the
 conversation.
 This function always returns nil."
@@ -822,9 +848,9 @@ This function always returns nil."
          (conversation
           (if current-conversation
               (progn
-                (ellm--add-user-message current-conversation wrapped-prompt)
+                (ellm--add-user-message current-conversation wrapped-prompt image-filepath)
                 current-conversation)
-            (ellm--initialize-conversation wrapped-prompt)))
+            (ellm--initialize-conversation wrapped-prompt image-filepath)))
          (output-buffer
           (or conversations-buffer
               (if ellm-save-conversations
@@ -836,15 +862,15 @@ This function always returns nil."
          (url-request-method "POST")
          (url-request-extra-headers request-headers)
          (url-request-data (ellm--serialize-conversation request-body)))
-      (ellm--log `((conversation . ,conversation)
-                   (output-buffer . ,(buffer-name output-buffer))
-                   (request-url . ,url)
-                   (request-headers . ,request-headers)
-                   (request-body . ,request-body))
-                 "REQUEST")
-      (url-retrieve url #'ellm--handle-response (list output-buffer conversation))
-      (message "...Waiting for response from %s..."
-               (symbol-name (ellm--get-model-provider conversation))))
+    (ellm--log `((conversation . ,conversation)
+                 (output-buffer . ,(buffer-name output-buffer))
+                 (request-url . ,url)
+                 (request-headers . ,request-headers)
+                 (request-body . ,request-body))
+               "REQUEST")
+    (url-retrieve url #'ellm--handle-response (list output-buffer conversation))
+    (message "...Waiting for response from %s..."
+             (symbol-name (ellm--get-model-provider conversation))))
   nil)
 
 (defun ellm--handle-response (status conversations-buffer conversation)
@@ -857,11 +883,14 @@ updated in the `CONVERSATIONS-BUFFER'."
   (cond ((plist-get status :error)
          (let* ((error-info (plist-get status :error))
                 (error-code (elt error-info 2)))
-           (message "HTTP error: %s" error-code)
-           (if (fboundp 'http-status-code)
-               (ellm--log (http-status-code (number-to-string error-code)) "HTTP-ERROR")
-             (ellm--log error-info "HTTP-ERROR"))
-         nil))
+           (goto-char url-http-end-of-headers)
+           (if-let* ((body (string-trim (buffer-substring-no-properties (point) (point-max))))
+                     (parsed-body (json-parse-string body :object-type 'plist))
+                     (error-object (plist-get parsed-body :error))
+                     (error-type (plist-get error-object :type))
+                     (error-message (plist-get error-object :message)))
+               (message (ellm--log (format "%d - (%s): %s" error-code error-type error-message) "HTTP-ERROR")))
+           nil))
         ((plist-get status :redirect)
          (progn
            (message "...HTTP redirect...")
@@ -1044,7 +1073,7 @@ is `HEADLINE-CHAR' or \"#\" by default."
   (mapconcat (lambda (part)
                (let ((text (alist-get 'text part))
                      (fmt-string "%s\n"))
-                   (format fmt-string text)))
+                 (format fmt-string text)))
              content))
 
 (defconst ellm--lua-filter-path
@@ -1469,6 +1498,10 @@ When at the top of the conversation, fold the subtree."
   "Return non-nil if `OVERLAY' is a context overlay."
   (overlay-get overlay 'ellm-context))
 
+(defun ellm--overlay-inline-image-p (overlay)
+  "Return non-nil if `OVERLAY' is an inline image overlay."
+  (overlay-get overlay 'org-image-overlay))
+
 (defun ellm--overlay-empty-p (overlay)
   "Return non-nil if `OVERLAY' is empty or deleted."
   (or (null (overlay-buffer overlay))
@@ -1568,6 +1601,27 @@ is not found, do nothing."
     (delete-overlay context-ov)
     (setq ellm-context-overlays (delq context-ov ellm-context-overlays))))
 
+(defun ellm-org--delete-inline-image-at-point ()
+  "Delete the inline image at point in the context buffer."
+  (interactive)
+  (let ((overlays (overlays-at (point))))
+    (catch 'deleted
+      (dolist (overlay overlays)
+        (when (overlay-get overlay 'org-image-overlay)
+          (let ((inhibit-read-only t)
+                (start (overlay-start overlay))
+                (end (overlay-end overlay)))
+            (delete-overlay overlay)
+            (delete-region start end)
+            (throw 'deleted t))))
+      nil)))
+
+(defun ellm-org-delete ()
+  "Delete inline image at point, or remove context chunk at point."
+  (interactive)
+  (unless (ellm-org--delete-inline-image-at-point)
+    (ellm-remove-context-chunk)))
+
 (defun ellm-view-context-buffer ()
   "View the context overlays in the current buffer."
   (interactive)
@@ -1605,17 +1659,34 @@ is not found, do nothing."
       (lambda (prompt)
         (format string-template context-string prompt))))
 
+(defun ellm-org--collect-image-filepaths ()
+  "Collect filepaths from all org-image-overlay links in context buffer."
+  (let ((filepaths '()))
+    (with-current-buffer (ellm-get-or-create-context-buffer)
+      (let ((overlays (overlays-in (point-min) (point-max))))
+        (dolist (overlay overlays)
+          (when (overlay-get overlay 'org-image-overlay)
+            (let* ((start (overlay-start overlay))
+                   (end (overlay-end overlay))
+                   (link-text (buffer-substring-no-properties start end)))
+              (when (string-match "\\[\\[file:\\([^]]+\\)\\]" link-text)
+                (let ((filepath (match-string 1 link-text)))
+                  (unless (member filepath filepaths)
+                    (push (match-string 1 link-text) filepaths)))))))))
+  (nreverse filepaths)))
+
 (defun ellm-context-complete ()
   "Complete the context in the context buffer."
   (interactive)
-  (let ((prompt-wrapper (ellm-context--build-prompt-wrapper)))
-    (ellm-chat nil nil prompt-wrapper)))
+  (let ((prompt-wrapper (ellm-context--build-prompt-wrapper))
+        (image-filepaths (ellm-org--collect-image-filepaths)))
+    (ellm-chat nil nil prompt-wrapper nil (nth 0 image-filepaths))))
 
 (defvar ellm-context-buffer-keymap
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") 'ellm-context-complete)
     (define-key map (kbd "C-c C-k") 'ellm-clear-context)
-    (define-key map (kbd "d") 'ellm-remove-context-chunk)
+    (define-key map (kbd "d") 'ellm-org-delete)
     map)
   "Keymap for `ellm-context-buffer-mode'.")
 
@@ -1631,6 +1702,22 @@ is not found, do nothing."
       (unless (eq major-mode 'ellm-context-buffer-mode)
         (ellm-context-buffer-mode)))
     buffer))
+
+(defun ellm--insert-image-into-context-buffer (filepath)
+  "Insert link to image at FILEPATH into the *ORG-BUFFER* buffer."
+  (interactive "fSelect image file: ")
+  (let ((inhibit-read-only t)
+        (buffer (get-buffer-create ellm--context-buffer-name)))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'org-mode)
+        (org-mode))
+      (goto-char (point-max))
+      (unless (bolp)
+        (insert "\n"))
+      (insert (format "[[file:%s]]\n" (expand-file-name filepath)))
+      (org-display-inline-images)
+      (when (called-interactively-p 'interactive)
+        (display-buffer buffer)))))
 
 ;;;###autoload
 (define-minor-mode ellm-mode
@@ -1650,6 +1737,7 @@ is not found, do nothing."
             (define-key map (kbd "C-c ; j") #'ellm-org-next-message)
             (define-key map (kbd "C-c ; k") #'ellm-org-previous-message)
             (define-key map (kbd "C-c ; m") #'ellm-add-context-chunk)
+            (define-key map (kbd "C-c ; i") #'ellm--insert-image-into-context-buffer)
             (define-key map (kbd "C-c ; d") #'ellm-remove-context-chunk)
             (define-key map (kbd "C-c ; x") #'ellm-view-context-buffer)
             (define-key map (kbd "C-c ; C-M-k") #'ellm-clear-context)
