@@ -668,7 +668,9 @@ Similar to `push', but for the end of the list."
            (memq role '(:user :assistant :system))
            (stringp content))
     (error "Invalid message role or content: %S %S" role content))
-  (let* ((image-msg (when image-path
+  (let* ((image-msg (when (and
+                           image-path
+                           (eq ellm-provider 'anthropic))
                       `((type . "image")
                         (source . ((type . "base64")
                                    (media_type . ,(ellm--detect-media-type image-path))
