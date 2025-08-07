@@ -82,7 +82,7 @@
           (const :tag "Small" small))
   :group 'ellm)
 
-(defcustom ellm-model "gpt-4o"
+(defcustom ellm-model "gpt-5"
   "The model to use when making a prompt."
   :type 'string
   :group 'ellm)
@@ -97,7 +97,7 @@
   :type 'integer
   :group 'ellm)
 
-(defcustom ellm--openai-models-alist `((big . "gpt-4.1")
+(defcustom ellm--openai-models-alist `((big . "gpt-5")
                                        (medium . "gpt-4.1-mini")
                                        (small . "gpt-4.1-nano"))
   "Alist mapping model sizes to OpenAI model names."
@@ -127,7 +127,7 @@
 
 (defvar ellm--models-alist
   (list
-   (cons 'openai `((big . "gpt-4.1")
+   (cons 'openai `((big . "gpt-5")
                    (medium . "gpt-4.1-mini")
                    (small . "gpt-4.1-nano")))
    (cons 'anthropic `((big . "claude-sonnet-4-20250514")
@@ -141,7 +141,7 @@
                        (small . "sonar"))))
   "Alist mapping providers to their models.")
 
-(defcustom ellm-model-alist `(("gpt-4.1" . (:provider openai :size big))
+(defcustom ellm-model-alist `(("gpt-5" . (:provider openai :size big))
                               ("gpt-4.1-mini" . (:provider openai :size medium))
                               ("gpt-4.1-nano" . (:provider openai :size small))
                               ("claude-sonnet-4-20250514" . (:provider anthropic :size big))
@@ -662,22 +662,38 @@ Similar to `push', but for the end of the list."
     (base64-encode-region (point-min) (point-max) t)
     (buffer-string)))
 
-(defun ellm--make-message (role content &optional image-path)
-  "Create a message with given `ROLE', `CONTENT' and optional `IMAGE-PATH'."
+(defun ellm--make-image-messages (image-paths)
+  "Create a list of image messages from `IMAGE-PATHS'."
+  (let ((msgs '())
+        (index 1))
+    (dolist (image-path image-paths)
+      (when (> (length image-paths) 1)
+        (push `((type . "text")
+                (text . ,(format "Image %d:" index)))
+              msgs))
+      (push `((type . "image")
+              (source . ((type . "base64")
+                         (media_type . ,(ellm--detect-media-type image-path))
+                         (data . ,(ellm--encode-image-to-base64 image-path)))))
+            msgs)
+      (setq index (1+ index)))
+    (nreverse msgs)))
+
+(defun ellm--make-message (role content &optional image-paths)
+  "Create a message with given `ROLE', `CONTENT' and optional `IMAGE-PATHS'."
   (unless (and
            (memq role '(:user :assistant :system))
            (stringp content))
     (error "Invalid message role or content: %S %S" role content))
-  (let* ((image-msg (when (and
-                           image-path
-                           (eq ellm-provider 'anthropic))
-                      `((type . "image")
-                        (source . ((type . "base64")
-                                   (media_type . ,(ellm--detect-media-type image-path))
-                                   (data . ,(ellm--encode-image-to-base64 image-path)))))))
+  (let* ((image-msgs (when (and
+                            image-paths
+                            (eq ellm-provider 'anthropic))
+                       (ellm--make-image-messages image-paths)))
          (text-msg `((type . "text")
                      (text . ,content)))
-         (content (if image-msg (list image-msg text-msg) (list text-msg))))
+         (content (if image-msgs
+                      (append image-msgs (list text-msg))
+                    (list text-msg))))
     `((role . ,role)
       (content . ,content))))
 
@@ -687,11 +703,11 @@ The system message is prepended to the `messages' list."
   (push (ellm--make-message :system content)
         (alist-get 'messages conversation)))
 
-(defun ellm--add-user-message (conversation content &optional image-path)
+(defun ellm--add-user-message (conversation content &optional image-paths)
   "Append a user message with `CONTENT' to the `CONVERSATION'.
 The user message is appended to the `messages' list."
   (ellm--append-to! (alist-get 'messages conversation)
-                    (ellm--make-message :user content image-path)))
+                    (ellm--make-message :user content image-paths)))
 
 (defun ellm--add-assistant-message (conversation content)
   "Append an assistant message with `CONTENT' to the `CONVERSATION'.
@@ -699,8 +715,8 @@ The assistant message is appended to the `messages' list."
   (ellm--append-to! (alist-get 'messages conversation)
                     (ellm--make-message :assistant content)))
 
-(defun ellm--initialize-conversation (prompt &optional image-path)
-  "Initialize a new conversation starting with `PROMPT' and optional `IMAGE-PATH'.
+(defun ellm--initialize-conversation (prompt &optional image-paths)
+  "Initialize a new conversation starting with `PROMPT' and optional `IMAGE-PATHS'.
 Return the conversation-data alist."
   (let* ((system-message-args
           (when (derived-mode-p 'prog-mode)
@@ -719,7 +735,7 @@ Return the conversation-data alist."
            (cons 'system-alias ellm-current-system-message)
            (cons 'title nil)
            (cons 'system (apply #'ellm--get-system-message system-message-args)))))
-    (ellm--add-user-message conversation prompt image-path)
+    (ellm--add-user-message conversation prompt image-paths)
     conversation))
 
 (defun ellm--prepare-request-headers (conversation)
@@ -762,11 +778,15 @@ compatible with `json-serialize'."
 The SYSTEM entry, if non-nil, is removed and made into a system message intead.
 Also remove the TITLE and ID entries."
   (let ((conversation-copy (copy-alist conversation))
-        (system-directives (alist-get 'system conversation)))
+        (system-directives (alist-get 'system conversation))
+        (max-tokens (alist-get 'max_tokens conversation)))
     (setf (alist-get 'title conversation-copy nil 'remove) nil
           (alist-get 'id conversation-copy nil 'remove) nil
           (alist-get 'system-alias conversation-copy nil 'remove) nil
-          (alist-get 'system conversation-copy nil 'remove) nil)
+          (alist-get 'system conversation-copy nil 'remove) nil
+          (alist-get 'max_tokens conversation-copy nil 'remove) nil
+          (alist-get 'temperature conversation-copy nil 'remove) nil
+          (alist-get 'max_completion_tokens conversation-copy) max-tokens)
     (when system-directives
       (let ((messages-copy (cl-copy-list (alist-get 'messages conversation))))
         (setf (alist-get 'messages conversation-copy) messages-copy)
@@ -819,7 +839,7 @@ project to target."
                                    ".org"))))
     (find-file-noselect filepath)))
 
-(defun ellm-chat (&optional current-conversation conversations-buffer prompt-wrapper user-prompt image-filepath)
+(defun ellm-chat (&optional current-conversation conversations-buffer prompt-wrapper user-prompt image-filepaths)
   "Send a chat request to the current provider's completion endpoint.
 This function is the main entry point for interacting with the `ellm' package.
 Optional arguments:
@@ -827,7 +847,7 @@ Optional arguments:
 - CONVERSATIONS-BUFFER: File path to save the conversation. If nil, use default.
 - PROMPT-WRAPPER: Function to wrap the prompt.
 - USER-PROMPT: Prompt string. If nil, read interactively.
-- IMAGE-FILEPATH: List of image file paths to include in the prompt.
+- IMAGE-FILEPATHS: List of image file paths to include in the prompt.
 The function sends the request, handles the response, and updates the
 conversation.
 This function always returns nil."
@@ -842,9 +862,9 @@ This function always returns nil."
          (conversation
           (if current-conversation
               (progn
-                (ellm--add-user-message current-conversation wrapped-prompt image-filepath)
+                (ellm--add-user-message current-conversation wrapped-prompt image-filepaths)
                 current-conversation)
-            (ellm--initialize-conversation wrapped-prompt image-filepath)))
+            (ellm--initialize-conversation wrapped-prompt image-filepaths)))
          (output-buffer
           (or conversations-buffer
               (if ellm-save-conversations
@@ -1666,7 +1686,7 @@ is not found, do nothing."
   (interactive)
   (let ((prompt-wrapper (ellm-context--build-prompt-wrapper))
         (image-filepaths (ellm-org--collect-image-filepaths)))
-    (ellm-chat nil nil prompt-wrapper nil (nth 0 image-filepaths))))
+    (ellm-chat nil nil prompt-wrapper nil image-filepaths)))
 
 (defvar ellm-context-buffer-keymap
   (let ((map (make-sparse-keymap)))
