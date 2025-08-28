@@ -48,7 +48,7 @@
 (defconst ellm--anthropic-api-url "https://api.anthropic.com/v1/messages"
   "The URL to send requests to the Anthropic API.")
 
-(defconst ellm--xai-api-url "https://api.x.ai/v1/chat/completions"
+(defconst ellm--xai-api-url "https://api.x.ai/v1/chat/messages"
   "The URL to send requests to the xAI API.")
 
 (defconst ellm--perplexity-api-url "https://api.perplexity.ai/chat/completions"
@@ -111,9 +111,9 @@
   :type 'alist
   :group 'ellm)
 
-(defcustom ellm--xai-models-alist `((big . "grok-beta")
-                                    (medium . "grok-beta")
-                                    (small . "grok-beta"))
+(defcustom ellm--xai-models-alist `((big . "grok-4-0709")
+                                    (medium . "grok-3")
+                                    (small . "grok-3-mini"))
   "Alist mapping model sizes to xAI model names."
   :type 'alist
   :group 'ellm)
@@ -133,9 +133,9 @@
    (cons 'anthropic `((big . "claude-sonnet-4-20250514")
                       (medium . "claude-3-7-sonnet-20250219")
                       (small . "claude-3-5-haiku-20241022")))
-   (cons 'xai `((big . "grok-beta")
-                (medium . "grok-beta")
-                (small . "grok-beta")))
+   (cons 'xai `((big . "grok-4-0709")
+                (medium . "grok-3")
+                (small . "grok-3-mini")))
    (cons 'perplexity `((big . "sonar-pro")
                        (medium . "sonar")
                        (small . "sonar"))))
@@ -147,9 +147,9 @@
                               ("claude-sonnet-4-20250514" . (:provider anthropic :size big))
                               ("claude-3-7-sonnet-20250219" . (:provider anthropic :size medium))
                               ("claude-3-5-haiku-20241022" . (:provider anthropic :size small))
-                              ("grok-beta" . (:provider xai :size big))
-                              ("grok-beta" . (:provider xai :size medium))
-                              ("grok-beta" . (:provider xai :size small))
+                              ("grok-4-0709" . (:provider xai :size big))
+                              ("grok-3" . (:provider xai :size medium))
+                              ("grok-3-mini" . (:provider xai :size small))
                               ("sonar-pro" . (:provider perplexity :size big))
                               ("sonar" . (:provider perplexity :size medium))
                               ("sonar" . (:provider perplexity :size small)))
@@ -167,8 +167,8 @@
                   (parse-response . ellm--parse-response-anthropic)
                   (models-alist . ,ellm--anthropic-models-alist)))
     (xai . ((prepare-request-headers . ellm--prepare-request-headers-default)
-            (prepare-request-body . ellm--prepare-request-body-default)
-            (parse-response . ellm--parse-response-openai)
+            (prepare-request-body . ellm--prepare-request-body-anthropic)
+            (parse-response . ellm--prepare-request-body-anthropic)
             (models-alist . ,ellm--xai-models-alist)))
     (perplexity . ((prepare-request-headers . ellm--prepare-request-headers-default)
                    (prepare-request-body . ellm--prepare-request-body-default)
@@ -273,6 +273,9 @@ Maintain a focus on technical precision and completeness without redundant expla
                            (if (null language) " " (format " %s " language))
                            "assisting a professional developer.
 Please maintain a focus on technical precision and completeness without redundant explanations or politeness.")))
+    (pandas :type string
+            :value "You are an expert in Python's Pandas library.
+Use the provided CONTEXT to achieve the user's task.")
     (latex-expert :type string
                   :value "You are an expert in LaTeX.")
     (prompt-generator :type string
@@ -472,7 +475,7 @@ system message function, if any are needed."
 
 (defun ellm--validation-max-tokens (max-tokens)
   "Validate the `MAX-TOKENS' value."
-  (when (and (integerp max-tokens) (> max-tokens 0) (<= max-tokens 8192))
+  (when (and (integerp max-tokens) (> max-tokens 0) (<= max-tokens 10240))
     max-tokens))
 
 (defun ellm-set-max-tokens (&optional max-tokens)
@@ -481,9 +484,9 @@ system message function, if any are needed."
   (let ((mt max-tokens))
     (if (called-interactively-p 'interactive)
         (while (null (setq mt (ellm--validation-max-tokens max-tokens)))
-          (setq max-tokens (read-number "Max tokens (between 1 and 8192): ")))
+          (setq max-tokens (read-number "Max tokens (between 1 and 10240): ")))
       (unless (setq mt (ellm--validation-max-tokens max-tokens))
-        (error "Invalid argument: `%s' should be integer between 1 and 8192" max-tokens)))
+        (error "Invalid argument: `%s' should be integer between 1 and 10240" max-tokens)))
     (setq ellm-max-tokens mt)
     (message "...max-tokens set to %s..." ellm-max-tokens)))
 
