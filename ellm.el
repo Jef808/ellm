@@ -54,6 +54,9 @@
 (defconst ellm--perplexity-api-url "https://api.perplexity.ai/chat/completions"
   "The URL to send requests to the Perplexity API.")
 
+(defconst ellm--gemini-api-url "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+  "The URL to send requests to the Gemini API.")
+
 (defcustom ellm--conversations-dir
   (directory-file-name (expand-file-name ".ellm/" "~/"))
   "The directory to store conversation history."
@@ -71,7 +74,8 @@
           (const :tag "OpenAI" openai)
           (const :tag "Anthropic" anthropic)
           (const :tag "xAI" xai)
-          (const :tag "Perplexity" perplexity))
+          (const :tag "Perplexity" perplexity)
+          (const :tag "Gemini" gemini))
   :group 'ellm)
 
 (defcustom ellm-model-size 'big
@@ -125,6 +129,13 @@
   :type 'alist
   :group 'ellm)
 
+(defcustom ellm--gemini-models-alist `((big . "gemini-2.5-pro")
+                                       (medium . "gemini-2.5-flash")
+                                       (small . "gemini-2.5-flash-lite"))
+  "Alist mapping model sizes to Gemini model names."
+  :type 'alist
+  :group 'ellm)
+
 (defvar ellm--models-alist
   (list
    (cons 'openai `((big . "gpt-5")
@@ -138,7 +149,10 @@
                 (small . "grok-3-mini")))
    (cons 'perplexity `((big . "sonar-pro")
                        (medium . "sonar")
-                       (small . "sonar"))))
+                       (small . "sonar")))
+   (cons 'gemini `((big . "gemini-2.5-pro")
+                   (medium . "gemini-2.5-flash")
+                   (small . "gemini-2.5-flash-lite"))))
   "Alist mapping providers to their models.")
 
 (defcustom ellm-model-alist `(("gpt-5" . (:provider openai :size big))
@@ -152,7 +166,10 @@
                               ("grok-3-mini" . (:provider xai :size small))
                               ("sonar-pro" . (:provider perplexity :size big))
                               ("sonar" . (:provider perplexity :size medium))
-                              ("sonar" . (:provider perplexity :size small)))
+                              ("sonar" . (:provider perplexity :size small))
+                              ("gemini-2.5-pro" . (:provider gemini :size big))
+                              ("gemini-2.5-flash" . (:provider gemini :size medium))
+                              ("gemini-2.5-flash-lite" . (:provider gemini :size small)))
   "Alist mapping model names to their providers."
   :type 'alist
   :group 'ellm)
@@ -173,7 +190,11 @@
     (perplexity . ((prepare-request-headers . ellm--prepare-request-headers-default)
                    (prepare-request-body . ellm--prepare-request-body-default)
                    (parse-response . ellm--parse-response-openai)
-                   (models-alist . ,ellm--perplexity-models-alist))))
+                   (models-alist . ,ellm--perplexity-models-alist)))
+    (gemini . ((prepare-request-headers . ellm--prepare-request-headers-default)
+               (prepare-request-body . ellm--prepare-request-body-default)
+               (parse-response . ellm--parse-response-openai)
+               (models-alist . ,ellm--gemini-models-alist))))
   "Alist mapping providers to their API configurations.")
 
 (defun ellm-providers-supported ()
