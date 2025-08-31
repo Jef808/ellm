@@ -48,7 +48,7 @@
 (defconst ellm--anthropic-api-url "https://api.anthropic.com/v1/messages"
   "The URL to send requests to the Anthropic API.")
 
-(defconst ellm--xai-api-url "https://api.x.ai/v1/chat/messages"
+(defconst ellm--xai-api-url "https://api.x.ai/v1/messages"
   "The URL to send requests to the xAI API.")
 
 (defconst ellm--perplexity-api-url "https://api.perplexity.ai/chat/completions"
@@ -112,7 +112,7 @@
   :group 'ellm)
 
 (defcustom ellm--xai-models-alist `((big . "grok-4-0709")
-                                    (medium . "grok-3")
+                                    (medium . "grok-code-fast-1")
                                     (small . "grok-3-mini"))
   "Alist mapping model sizes to xAI model names."
   :type 'alist
@@ -134,7 +134,7 @@
                       (medium . "claude-3-7-sonnet-20250219")
                       (small . "claude-3-5-haiku-20241022")))
    (cons 'xai `((big . "grok-4-0709")
-                (medium . "grok-3")
+                (medium . "grok-code-fast-1")
                 (small . "grok-3-mini")))
    (cons 'perplexity `((big . "sonar-pro")
                        (medium . "sonar")
@@ -148,7 +148,7 @@
                               ("claude-3-7-sonnet-20250219" . (:provider anthropic :size medium))
                               ("claude-3-5-haiku-20241022" . (:provider anthropic :size small))
                               ("grok-4-0709" . (:provider xai :size big))
-                              ("grok-3" . (:provider xai :size medium))
+                              ("grok-code-fast-1" . (:provider xai :size medium))
                               ("grok-3-mini" . (:provider xai :size small))
                               ("sonar-pro" . (:provider perplexity :size big))
                               ("sonar" . (:provider perplexity :size medium))
@@ -168,7 +168,7 @@
                   (models-alist . ,ellm--anthropic-models-alist)))
     (xai . ((prepare-request-headers . ellm--prepare-request-headers-default)
             (prepare-request-body . ellm--prepare-request-body-anthropic)
-            (parse-response . ellm--prepare-request-body-anthropic)
+            (parse-response . ellm--parse-response-anthropic)
             (models-alist . ,ellm--xai-models-alist)))
     (perplexity . ((prepare-request-headers . ellm--prepare-request-headers-default)
                    (prepare-request-body . ellm--prepare-request-body-default)
@@ -271,7 +271,7 @@ Maintain a focus on technical precision and completeness without redundant expla
           :value (lambda (language)
                    (concat "You are an expert"
                            (if (null language) " " (format " %s " language))
-                           "assisting a professional developer.
+                           "programmer assisting a professional developer.
 Please maintain a focus on technical precision and completeness without redundant explanations or politeness.")))
     (pandas :type string
             :value "You are an expert in Python's Pandas library.
@@ -687,7 +687,7 @@ Similar to `push', but for the end of the list."
   (unless (and
            (memq role '(:user :assistant :system))
            (stringp content))
-    (error "Invalid message role or content: %S %S" role content))
+    (error "Invalid message ROLE or CONTENT: %S %S" role content))
   (let* ((image-msgs (when (and
                             image-paths
                             (eq ellm-provider 'anthropic))
@@ -799,13 +799,18 @@ Also remove the TITLE and ID entries."
 (defun ellm--prepare-request-body-anthropic (conversation)
   "Prepare the API call body to send `CONVERSATION'.
 Remove the SYSTEM entry in case it is nil.
-Also remove the TITLE and ID entries."
+Remove TITLE, ID and system-alias.
+To enable thinking mode for Anthropic, we set thinking budget to 10000 token
+and remove temperature."
   (let ((conversation-copy (copy-alist conversation))
         (system-directives (alist-get 'system conversation)))
     (setf (alist-get 'title conversation-copy nil 'remove) nil
           (alist-get 'id conversation-copy nil 'remove) nil
           (alist-get 'system-alias conversation-copy nil 'remove) nil
           (alist-get 'system conversation-copy nil 'remove) system-directives)
+    (when (eq ellm-provider 'anthropic)
+      (setf (alist-get 'temperature conversation-copy nil 'remove) nil)
+      (push (cons 'thinking '((type . "enabled") (budget_tokens . 10000))) conversation-copy))
     conversation-copy))
 
 (defun ellm--prepare-request-body (conversation)
@@ -880,10 +885,9 @@ This function always returns nil."
          (url-request-method "POST")
          (url-request-extra-headers request-headers)
          (url-request-data serialized-request-body))
-    (ellm--log `((conversation . ,conversation)
-                 (output-buffer . ,(buffer-name output-buffer))
+    (ellm--log `((output-buffer . ,(buffer-name output-buffer))
                  (request-url . ,url)
-                 (request-body . ,serialized-request-body))
+                 (request-body . ,request-body))
                "REQUEST")
     (url-retrieve url #'ellm--handle-response (list output-buffer conversation))
     (message "...Waiting for response from %s..."
@@ -1024,14 +1028,31 @@ This function is meant to be used with the response from the OpenAI API."
         (replace-regexp-in-string "\\\\\"" "\"" content))
     (wrong-type-argument (ellm--log error "RESPONSE-ERROR"))))
 
+;; (defun ellm--parse-response-anthropic (response)
+;;   "Extract the text from the json `RESPONSE'."
+;;   (condition-case error
+;;       (let* ((messages (gethash "content" response))
+;;              (first-message (aref messages 0))
+;;              (content (gethash "text" first-message)))
+;;         (replace-regexp-in-string "\\\\\"" "\"" content))
+;;     (wrong-type-argument (ellm--log error "RESPONSE-ERROR"))))
+
 (defun ellm--parse-response-anthropic (response)
-  "Extract the text from the json `RESPONSE'."
+  "Extract the content of all messages from the `RESPONSE'."
   (condition-case error
       (let* ((messages (gethash "content" response))
-             (first-message (aref messages 0))
-             (content (gethash "text" first-message)))
-        (replace-regexp-in-string "\\\\\"" "\"" content))
-    (wrong-type-argument (ellm--log error "RESPONSE-ERROR"))))
+             (len (length messages))
+             (text nil)
+             (i 0))
+        (while (and (< i len) (null text))
+          (let ((msg (aref messages i)))
+            (when (and (hash-table-p msg)
+                       (equal (gethash "type" msg) "text"))
+              (setq text (gethash "text" msg))))
+          (setq i (1+ i)))
+        (if (null text) "EMPTY" (replace-regexp-in-string "\\\\\"" "\"" text)))
+    (wrong-type-argument (ellm--log error "RESPONSE-ERROR")
+                         "EMPTY")))
 
 (defun ellm--add-or-update-title (title conversation)
   "Add or update the `TITLE' in the `CONVERSATION'.
