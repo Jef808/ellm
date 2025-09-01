@@ -1049,15 +1049,6 @@ This function is meant to be used with the response from the OpenAI API."
         (replace-regexp-in-string "\\\\\"" "\"" content))
     (wrong-type-argument (ellm--log error "RESPONSE-ERROR"))))
 
-;; (defun ellm--parse-response-anthropic (response)
-;;   "Extract the text from the json `RESPONSE'."
-;;   (condition-case error
-;;       (let* ((messages (gethash "content" response))
-;;              (first-message (aref messages 0))
-;;              (content (gethash "text" first-message)))
-;;         (replace-regexp-in-string "\\\\\"" "\"" content))
-;;     (wrong-type-argument (ellm--log error "RESPONSE-ERROR"))))
-
 (defun ellm--parse-response-anthropic (response)
   "Extract the content of all messages from the `RESPONSE'."
   (condition-case error
