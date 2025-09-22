@@ -915,65 +915,37 @@ This function always returns nil."
              (symbol-name (ellm--get-model-provider conversation))))
   nil)
 
-(defun ellm--safely-parse-json-body ()
-  "Extract and parse the JSON body from the current buffer.
-Handles empty body and JSON parsing errors, logging diagnostics on failure.
-Returns the parsed plist on success, or nil on failure."
-  (goto-char url-http-end-of-headers)
-  (let ((body (string-trim (buffer-substring-no-properties (point) (point-max)))))
-    (if (string-empty-p body)
-        (progn
-          (message (ellm--log "No response body (DNS resolve or TCP error)" "REQUEST-ERROR"))
-          nil)
-      (condition-case err
-          (json-parse-string body :object-type 'plist)
-        (json-read-error
-         (ellm--log (format "Failed to parse JSON response. Error: %s\nBody: %s" err body) "JSON-PARSE-ERROR")
-         nil)))))
-
 (defun ellm--handle-response (status conversations-buffer conversation)
   "Handle the response to the prompt made using `CONVERSATION'.
 Information about the response is contained in `STATUS' (see `url-retrieve').
 The response is added to the `CONVERSATION' and the conversation is added or
 updated in the `CONVERSATIONS-BUFFER'."
-  (condition-case err
-    (progn
-      (message "...Received response from %s..."
-               (symbol-name (ellm--get-model-provider conversation)))
-      (cond
-       ;; HTTP-level Error (4xx, 5xx)
-       ((plist-get status :error)
-        (let* ((error-info (plist-get status :error))
-               (error-code (elt error-info 2))
-               (parsed-body (ellm--safely-parse-json-body)))
-          ;; If body was parsed, try to extract detailed error info.
-          ;; `pcase' is more robust for destructuring than nested `plist-get'.
-          (if parsed-body
-              (pcase (plist-get parsed-body :error)
-                (`(plist :type ,type :message ,message)
-                 (message (ellm--log (format "%d - (%s): %s" error-code type message) "HTTP-ERROR")))
-                (_
-                 (message (ellm--log (format "HTTP %d with unexpected error structure: %S" error-code parsed-body) "HTTP-ERROR-UNEXPECTED-STRUCTURE"))))
-            (message "API request failed with HTTP status %d. Check *ellm-logs*." error-code)))
-        nil)
-
-       ;; HTTP Redirect
-       ((plist-get status :redirect)
-        (message "...HTTP redirect...")
-        (ellm--log status "HTTP-REDIRECT")
-        nil)
-
-       ;; Successful HTTP response (2xx)
-       (t
-        (let ((response (ellm--safely-parse-json-body)))
-          (when response
-            (message "...Updating conversation...")
-            (ellm--add-response-to-conversation conversations-buffer conversation response)
-            (message "...Conversation updated..."))
-          response))))
-    (error
-     (ellm--log (format "Unexpected error in response handler: %s\nStatus: %s" err status) "HANDLER-ERROR")
-     nil)))
+  (message "...Received response from %s..."
+           (symbol-name (ellm--get-model-provider conversation)))
+  (cond ((plist-get status :error)
+         (let* ((error-info (plist-get status :error))
+                (error-code (elt error-info 2)))
+           (goto-char url-http-end-of-headers)
+           (if-let* ((body (string-trim (buffer-substring-no-properties (point) (point-max))))
+                     (parsed-body (json-parse-string body :object-type 'plist))
+                     (error-object (plist-get parsed-body :error))
+                     (error-type (plist-get error-object :type))
+                     (error-message (plist-get error-object :message)))
+               (message (ellm--log (format "%d - (%s): %s" error-code error-type error-message) "HTTP-ERROR")))
+           nil))
+        ((plist-get status :redirect)
+         (progn
+           (message "...HTTP redirect...")
+           (ellm--log status "HTTP-REDIRECT"))
+         nil)
+        (t (goto-char url-http-end-of-headers)
+           (if (<= (point-max) (point))
+             (message (ellm--log "No response body (DNS resolve or TCP error)" "REQUEST-ERROR"))
+             (let ((response (ellm--parse-json-response)))
+               (when response
+                 (ellm--add-response-to-conversation conversations-buffer conversation response)
+                 (message "...Conversation updated..."))
+               response)))))
 
 (defun ellm--add-response-to-conversation (conversations-buffer conversation response)
   "Process the `RESPONSE' from the API call made with config `CONVERSATION'.
