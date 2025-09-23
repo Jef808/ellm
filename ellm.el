@@ -926,13 +926,14 @@ updated in the `CONVERSATIONS-BUFFER'."
          (let* ((error-info (plist-get status :error))
                 (error-code (elt error-info 2)))
            (goto-char url-http-end-of-headers)
-           (if-let* ((body (string-trim (buffer-substring-no-properties (point) (point-max))))
-                     (parsed-body (json-parse-string body :object-type 'plist))
-                     (error-object (plist-get parsed-body :error))
-                     (error-type (plist-get error-object :type))
-                     (error-message (plist-get error-object :message)))
-               (message (ellm--log (format "%d - (%s): %s" error-code error-type error-message) "HTTP-ERROR")))
-           nil))
+           (let ((body (string-trim (buffer-substring-no-properties (point) (point-max)))))
+             (message (ellm--log (format "%d: %s" error-code body) "HTTP-ERROR-RAW"))
+             (if-let* ((parsed-body (ignore-errors (json-parse-string body :object-type 'plist)))
+                       (error-object (plist-get parsed-body :error))
+                       (error-type (plist-get error-object :type))
+                       (error-message (plist-get error-object :message)))
+               (message (ellm--log (format "%d - (%s): %s" error-code error-type error-message) "HTTP-ERROR-PARSED")))
+           nil)))
         ((plist-get status :redirect)
          (progn
            (message "...HTTP redirect...")
@@ -1030,10 +1031,11 @@ The required properties are TITLE, ID, MODEL, TEMPERATURE and SYSTEM-ALIAS."
 (defun ellm--parse-json-response ()
   "Parse the json response from the API call."
   (condition-case error
-      (let ((response-body
-             (string-trim (buffer-substring-no-properties (point) (point-max)))))
-        (ellm--log (json-parse-string response-body) "RESPONSE")
-        (json-parse-string response-body))
+      (let* ((json-object-type 'hash-table)
+             (response-raw
+              (string-trim (buffer-substring-no-properties (point) (point-max)))))
+        (ellm--log response-raw "RESPONSE-RAW")
+        (ellm--log (json-parse-string response-raw) "RESPONSE"))
     (json-parse-error
      (ellm--log error "JSON-PARSE-ERROR")
      nil)))
